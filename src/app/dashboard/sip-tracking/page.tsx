@@ -39,87 +39,39 @@ import {
     Legend,
 } from "recharts";
 
-// Predefined assets matching the dashboard featured ones for seamless alignment
+// Dynamic asset type — no hardcoded data
 interface Asset {
     symbol: string;
     name: string;
     type: "Stock" | "Mutual Fund" | "Bond";
     cagr3y: number;
+    cagr5y?: number;
+    cagr1y?: number;
     volatility: "Low" | "Medium" | "High";
+    volatilityPercent?: number;
     consistency: number; // Sharpe consistency out of 100
     drawdown: number; // Worst historical drop %
     sector: string;
+    riskLabel?: string;
+    aiSummary?: string;
+    strengths?: string[];
+    risks?: string[];
+    recommendation?: string;
+    // Groww enrichment
+    marketCap?: string;
+    peRatio?: number;
+    roe?: number;
+    debtToEquity?: number;
 }
 
-const PRESET_ASSETS: Asset[] = [
-    {
-        symbol: "PPFAS_FLEXI",
-        name: "Parag Parikh Flexi Cap Fund",
-        type: "Mutual Fund",
-        cagr3y: 19.4,
-        volatility: "Medium",
-        consistency: 88,
-        drawdown: -14.2,
-        sector: "Multi-Sector Equity & US Tech",
-    },
-    {
-        symbol: "HDFC_MIDCAP",
-        name: "HDFC Mid-Cap Opportunities Fund",
-        type: "Mutual Fund",
-        cagr3y: 24.8,
-        volatility: "High",
-        consistency: 91,
-        drawdown: -19.5,
-        sector: "Mid-Cap Equities",
-    },
-    {
-        symbol: "NIFTY_INDEX",
-        name: "UTI Nifty 50 Index Fund",
-        type: "Mutual Fund",
-        cagr3y: 14.1,
-        volatility: "Medium",
-        consistency: 82,
-        drawdown: -11.8,
-        sector: "Top 50 Indian Corporations",
-    },
-    {
-        symbol: "RELIANCE",
-        name: "Reliance Industries Ltd.",
-        type: "Stock",
-        cagr3y: 16.5,
-        volatility: "Medium",
-        consistency: 79,
-        drawdown: -15.8,
-        sector: "Energy, Retail & Digital",
-    },
-    {
-        symbol: "TCS",
-        name: "Tata Consultancy Services Ltd.",
-        type: "Stock",
-        cagr3y: 12.8,
-        volatility: "Low",
-        consistency: 84,
-        drawdown: -10.2,
-        sector: "Global IT Services",
-    },
-    {
-        symbol: "GOI_BOND_715",
-        name: "Govt of India 7.15% Bond",
-        type: "Bond",
-        cagr3y: 7.15,
-        volatility: "Low",
-        consistency: 98,
-        drawdown: 0.0,
-        sector: "Sovereign Debt",
-    },
-];
+// NO PRESET_ASSETS — everything is loaded dynamically
 
 function ComparativeSIPAnalyzerContent() {
     const searchParams = useSearchParams();
     const compareQuery = searchParams.get("compare");
 
     // UI Configuration States
-    const [selectedSymbols, setSelectedSymbols] = useState<string[]>(["PPFAS_FLEXI", "NIFTY_INDEX"]);
+    const [selectedSymbols, setSelectedSymbols] = useState<string[]>([]);
     const [sipAmount, setSipAmount] = useState<number>(10000);
     const [years, setYears] = useState<number>(10);
     const [stepUp, setStepUp] = useState<number>(10); // Yearly step-up %
@@ -144,13 +96,51 @@ function ComparativeSIPAnalyzerContent() {
         sector: "Custom Sector",
     });
 
-    const [assetsList, setAssetsList] = useState<Asset[]>(PRESET_ASSETS);
+    const [assetsList, setAssetsList] = useState<Asset[]>([]);
+    const [initialLoading, setInitialLoading] = useState(true);
 
     // AI recommendation state
     const [aiRecommendation, setAiRecommendation] = useState<string>("");
     const [loadingAi, setLoadingAi] = useState<boolean>(false);
     const [copied, setCopied] = useState<boolean>(false);
     const [loadingMessage, setLoadingMessage] = useState<string>("");
+
+    // Load initial assets dynamically from trending API on mount
+    useEffect(() => {
+        const loadInitialAssets = async () => {
+            setInitialLoading(true);
+            try {
+                const res = await fetch("/api/market/trending");
+                const data = await res.json();
+                if (data.success && data.data && Array.isArray(data.data)) {
+                    const trendingAssets: Asset[] = data.data.map((a: any) => ({
+                        symbol: a.symbol,
+                        name: a.name,
+                        type: a.type,
+                        cagr3y: a.cagr3y,
+                        cagr1y: a.cagr1y,
+                        volatility: a.volatility,
+                        consistency: a.consistency,
+                        drawdown: a.drawdown,
+                        sector: a.sector,
+                        riskLabel: a.riskLabel,
+                    }));
+                    setAssetsList(trendingAssets);
+                    // Auto-select first 2 assets for comparison
+                    if (trendingAssets.length >= 2) {
+                        setSelectedSymbols([trendingAssets[0].symbol, trendingAssets[1].symbol]);
+                    } else if (trendingAssets.length === 1) {
+                        setSelectedSymbols([trendingAssets[0].symbol]);
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to load initial assets", e);
+            } finally {
+                setInitialLoading(false);
+            }
+        };
+        loadInitialAssets();
+    }, []);
 
     // Debounce search input and hit real Groww API gateway
     useEffect(() => {
@@ -217,10 +207,12 @@ function ComparativeSIPAnalyzerContent() {
         }
     };
 
-    // Read URL search params
+    // Read URL search params for cross-page asset pre-selection
     useEffect(() => {
-        if (compareQuery && PRESET_ASSETS.some((a) => a.symbol === compareQuery)) {
-            // Put it in the comparison list if not already there
+        if (!compareQuery) return;
+        // Check if the symbol is already in our list
+        const existsInList = assetsList.some((a) => a.symbol === compareQuery);
+        if (existsInList) {
             if (!selectedSymbols.includes(compareQuery)) {
                 if (selectedSymbols.length >= 3) {
                     setSelectedSymbols([selectedSymbols[0], selectedSymbols[1], compareQuery]);
@@ -228,8 +220,37 @@ function ComparativeSIPAnalyzerContent() {
                     setSelectedSymbols([...selectedSymbols, compareQuery]);
                 }
             }
+        } else {
+            // Asset not in list yet — fetch it dynamically using URL params
+            const urlParams = new URLSearchParams(window.location.search);
+            const assetName = urlParams.get("name");
+            const assetType = urlParams.get("type") || "Stock";
+            if (assetName) {
+                const fetchAndAdd = async () => {
+                    try {
+                        const detailsUrl = `/api/market/details?name=${encodeURIComponent(assetName)}&type=${encodeURIComponent(assetType)}&symbol=${encodeURIComponent(compareQuery)}&id=`;
+                        const res = await fetch(detailsUrl);
+                        const data = await res.json();
+                        if (data.success && data.data) {
+                            const newAsset: Asset = data.data;
+                            setAssetsList((prev) => {
+                                if (prev.some((a) => a.symbol === newAsset.symbol)) return prev;
+                                return [...prev, newAsset];
+                            });
+                            setSelectedSymbols((prev) => {
+                                if (prev.includes(newAsset.symbol)) return prev;
+                                if (prev.length < 3) return [...prev, newAsset.symbol];
+                                return [prev[0], prev[1], newAsset.symbol];
+                            });
+                        }
+                    } catch (e) {
+                        console.error("Failed to load asset from URL params", e);
+                    }
+                };
+                fetchAndAdd();
+            }
         }
-    }, [compareQuery]);
+    }, [compareQuery, assetsList]);
 
     // Handle adding custom asset to the list and selecting it
     const handleAddCustomAsset = () => {
@@ -362,17 +383,19 @@ function ComparativeSIPAnalyzerContent() {
         };
     };
 
-    // AI recommendation triggering
+    // AI recommendation triggering — uses the deep /api/market/analyze endpoint
     const handleFetchAIRecommendation = async () => {
+        if (selectedAssets.length === 0) return;
+
         setLoadingAi(true);
         setAiRecommendation("");
         
         const loaderPrompts = [
-            "Calculating compound growth vectors...",
-            "Analyzing risk volatility indexes...",
-            "Weighing Drawdown metrics and historical stress...",
-            "Comparing asset efficiencies...",
-            "Generating conversational recommendation...",
+            "Retrieving real-time performance data...",
+            "Analyzing CAGR and risk-reward matrices...",
+            "Running compound projection scenarios...",
+            "Evaluating drawdown resilience...",
+            "Generating actionable investment recommendation...",
         ];
         
         let promptIndex = 0;
@@ -380,51 +403,112 @@ function ComparativeSIPAnalyzerContent() {
         const loaderInterval = setInterval(() => {
             promptIndex = (promptIndex + 1) % loaderPrompts.length;
             setLoadingMessage(loaderPrompts[promptIndex]);
-        }, 1500);
+        }, 1800);
 
         try {
-            const comparisonPrompt = `Compare side-by-side these ${selectedAssets.length} assets for a disciplined ${years}-year SIP with a starting monthly SIP of ₹${sipAmount.toLocaleString("en-IN")} and a yearly step-up of ${stepUp}%:
-            
-            ${selectedAssets.map((asset, idx) => {
+            // Enrich assets with computed projection data
+            const enrichedAssets = selectedAssets.map((asset) => {
                 const metrics = getAssetSummaryMetrics(asset);
-                return `${idx + 1}. **${asset.name} (${asset.symbol})**
-                - Asset Type: ${asset.type}
-                - 3Y CAGR: ${asset.cagr3y}%
-                - Volatility Risk: ${asset.volatility}
-                - Sharpe Consistency Score: ${asset.consistency}/100
-                - Max Drawdown: ${asset.drawdown}%
-                - Compound Projection: Invested ₹${metrics.invested.toLocaleString("en-IN")}, projected future value is ₹${metrics.futureValue.toLocaleString("en-IN")} (${metrics.multiplier}x multiplier).
-                - Asset Sector: ${asset.sector}`;
-            }).join("\n")}
-            
-            Provide a premium, highly professional teller analysis comparing these choices. Explicitly advise on:
-            1. Which choice offers the best risk-adjusted path for a long-term goal.
-            2. The impact of the ${stepUp}% yearly SIP step-up.
-            3. A strategic conclusion of which SIP to select for the ultimate long-term compounding. Avoid generic advice, be highly specific to these metrics.`;
+                return {
+                    ...asset,
+                    projectedInvested: metrics.invested,
+                    projectedFutureValue: metrics.futureValue,
+                    projectedMultiplier: metrics.multiplier,
+                    projectedGrowth: metrics.growth,
+                    efficiencyScore: metrics.efficiencyScore,
+                };
+            });
 
-            const response = await fetch("/api/ai/insights", {
+            const response = await fetch("/api/market/analyze", {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
+                headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    prompt: comparisonPrompt,
-                    type: "comparison",
+                    assets: enrichedAssets,
+                    sipAmount,
+                    years,
+                    stepUp,
                 }),
             });
 
             const data = await response.json();
             clearInterval(loaderInterval);
 
-            if (data.success && data.text) {
-                setAiRecommendation(data.text);
+            if (data.success && data.data) {
+                // Format structured analysis into readable markdown
+                const analysis = data.data;
+                let formattedText = "";
+
+                if (analysis.verdict) {
+                    formattedText += `### 🏆 Verdict\n\n${analysis.verdict}\n\n`;
+                }
+
+                if (analysis.ranking && Array.isArray(analysis.ranking)) {
+                    formattedText += `### 📊 Investment Rankings\n\n`;
+                    analysis.ranking.forEach((r: any) => {
+                        formattedText += `**#${r.rank} — ${r.name}** (Score: ${r.score}/100)\n${r.rationale}\n\n`;
+                    });
+                }
+
+                if (analysis.deepAnalysis) {
+                    const da = analysis.deepAnalysis;
+                    if (da.riskRewardMatrix) {
+                        formattedText += `### ⚖️ Risk-Reward Analysis\n\n${da.riskRewardMatrix}\n\n`;
+                    }
+                    if (da.compoundingAdvantage) {
+                        formattedText += `### 📈 Compounding Advantage\n\n${da.compoundingAdvantage}\n\n`;
+                    }
+                    if (da.marketCycleResilience) {
+                        formattedText += `### 🛡️ Market Cycle Resilience\n\n${da.marketCycleResilience}\n\n`;
+                    }
+                    if (da.sipOptimalStrategy) {
+                        formattedText += `### 🎯 Optimal SIP Strategy\n\n${da.sipOptimalStrategy}\n\n`;
+                    }
+                }
+
+                if (analysis.projections) {
+                    formattedText += `### 🔮 Projections\n\n`;
+                    if (analysis.projections.bestCase) formattedText += `* **Best Case:** ${analysis.projections.bestCase}\n`;
+                    if (analysis.projections.worstCase) formattedText += `* **Worst Case:** ${analysis.projections.worstCase}\n`;
+                    if (analysis.projections.recommendation) formattedText += `* **Recommendation:** ${analysis.projections.recommendation}\n\n`;
+                }
+
+                if (analysis.keyInsights && Array.isArray(analysis.keyInsights)) {
+                    formattedText += `### 💡 Key Insights\n\n`;
+                    analysis.keyInsights.forEach((insight: string) => {
+                        formattedText += `* ${insight}\n`;
+                    });
+                    formattedText += "\n";
+                }
+
+                if (analysis.warnings && Array.isArray(analysis.warnings)) {
+                    formattedText += `### ⚠️ Important Warnings\n\n`;
+                    analysis.warnings.forEach((w: string) => {
+                        formattedText += `* ${w}\n`;
+                    });
+                }
+
+                setAiRecommendation(formattedText.trim());
             } else {
-                setAiRecommendation("Failed to receive AI feedback. Please try again.");
+                // Fallback to the chat-style insights API
+                const fallbackRes = await fetch("/api/ai/insights", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        prompt: `Compare these ${selectedAssets.length} assets for a ${years}-year SIP of ₹${sipAmount.toLocaleString("en-IN")}/month with ${stepUp}% step-up: ${selectedAssets.map(a => `${a.name} (${a.cagr3y}% CAGR, ${a.volatility} volatility)`).join(" vs ")}. Give a decisive recommendation.`,
+                        type: "comparison",
+                    }),
+                });
+                const fallbackData = await fallbackRes.json();
+                if (fallbackData.success && fallbackData.text) {
+                    setAiRecommendation(fallbackData.text);
+                } else {
+                    setAiRecommendation("Failed to receive AI feedback. Please try again.");
+                }
             }
         } catch (e) {
             clearInterval(loaderInterval);
-            console.error("AI fetch failed", e);
-            setAiRecommendation("Failed to connect to the WealthyMinds Teller model. Verify network connection.");
+            console.error("AI analysis failed", e);
+            setAiRecommendation("Failed to connect to the WealthyMinds analysis engine. Please check your connection and try again.");
         } finally {
             setLoadingAi(false);
         }
@@ -525,10 +609,27 @@ function ComparativeSIPAnalyzerContent() {
                 <div className="flex items-center justify-between">
                     <p className="text-sm font-bold text-text-primary flex items-center gap-1.5">
                         <Info className="h-4 w-4 text-wealth-400" />
-                        Select up to 3 Assets to Compare (Currently {selectedSymbols.length}/3 selected)
+                        {assetsList.length === 0 && !initialLoading
+                            ? "Search above to add assets for comparison"
+                            : `Select up to 3 Assets to Compare (Currently ${selectedSymbols.length}/3 selected)`}
                     </p>
-                    <Badge variant="outline">Click to Select/Deselect</Badge>
+                    <Badge variant="outline">
+                        {initialLoading ? "Loading live data..." : "Click to Select/Deselect"}
+                    </Badge>
                 </div>
+
+                {/* Loading skeleton */}
+                {initialLoading && (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                        {[1, 2, 3, 4, 5, 6].map((i) => (
+                            <div key={i} className="p-3.5 rounded-xl border border-border-subtle bg-surface-50 animate-pulse">
+                                <div className="h-4 w-12 bg-surface-200 rounded mb-2" />
+                                <div className="h-3 w-24 bg-surface-200 rounded mb-2" />
+                                <div className="h-3 w-16 bg-surface-200 rounded" />
+                            </div>
+                        ))}
+                    </div>
+                )}
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                     {assetsList.map((asset) => {
@@ -855,6 +956,52 @@ function ComparativeSIPAnalyzerContent() {
                             className="mt-6 border border-border-subtle rounded-xl bg-surface-50 p-6 relative"
                         >
                             <div className="absolute top-4 right-4 flex items-center gap-2">
+                                <button
+                                    onClick={() => {
+                                        const printContent = aiRecommendation
+                                            .replace(/\\n/g, '\n')
+                                            .replace(/### /g, '\n\n')
+                                            .replace(/\*\*/g, '');
+                                        const printWindow = window.open('', '_blank');
+                                        if (printWindow) {
+                                            printWindow.document.write(`
+                                                <html>
+                                                <head>
+                                                    <title>WealthyMinds AI Teller Report</title>
+                                                    <style>
+                                                        body { font-family: 'Inter', 'Segoe UI', sans-serif; max-width: 700px; margin: 40px auto; padding: 0 20px; color: #1a1a2e; line-height: 1.7; }
+                                                        h1 { font-size: 22px; color: #1a1a2e; border-bottom: 2px solid #6366f1; padding-bottom: 8px; }
+                                                        h2 { font-size: 16px; color: #4338ca; margin-top: 24px; }
+                                                        h4 { font-size: 14px; color: #4338ca; margin-top: 20px; border-bottom: 1px solid #e5e7eb; padding-bottom: 4px; }
+                                                        p { font-size: 13px; margin: 8px 0; }
+                                                        ul { padding-left: 20px; }
+                                                        li { font-size: 12px; margin: 4px 0; }
+                                                        .meta { color: #6b7280; font-size: 11px; margin-bottom: 20px; }
+                                                        .footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; text-align: center; }
+                                                    </style>
+                                                </head>
+                                                <body>
+                                                    <h1>🧠 WealthyMinds AI Teller Report</h1>
+                                                    <p class="meta">Generated on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })} • Assets: ${selectedAssets.map(a => a.name).join(', ')}</p>
+                                                    <p class="meta">SIP: ₹${sipAmount.toLocaleString('en-IN')}/month • Duration: ${years} years • Step-up: ${stepUp}%/year</p>
+                                                    ${aiRecommendation.split('\\n\\n').map(p => {
+                                                        if (p.startsWith('###')) return `<h4>${p.replace('###', '').trim()}</h4>`;
+                                                        if (p.startsWith('* ') || p.startsWith('- ')) return `<ul>${p.split('\\n').map(li => `<li>${li.replace(/^[\*\-]\s+/, '')}</li>`).join('')}</ul>`;
+                                                        return `<p>${p}</p>`;
+                                                    }).join('')}
+                                                    <div class="footer">WealthyMinds — AI-Powered Wealth Intelligence • This is not financial advice</div>
+                                                </body>
+                                                </html>
+                                            `);
+                                            printWindow.document.close();
+                                            printWindow.print();
+                                        }
+                                    }}
+                                    className="p-2 rounded-lg bg-surface-100 hover:bg-surface-200 border border-border-subtle text-text-secondary hover:text-text-primary transition-all duration-200"
+                                    title="Export as PDF"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+                                </button>
                                 <button
                                     onClick={copyToClipboard}
                                     className="p-2 rounded-lg bg-surface-100 hover:bg-surface-200 border border-border-subtle text-text-secondary hover:text-text-primary transition-all duration-200"

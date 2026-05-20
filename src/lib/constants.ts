@@ -25,6 +25,10 @@ export const ROUTES = {
     SIP_TRACKING: "/dashboard/sip-tracking", // Used as SIP Analyzer
     AI_INSIGHTS: "/dashboard/ai-insights", // Used as AI Chat Teller
     WEALTH_PROJECTION: "/dashboard/wealth-projection", // Used as SIP Projections
+    GOAL_CALCULATOR: "/dashboard/goal-calculator", // Reverse SIP Calculator
+    FUND_EXPLORER: "/dashboard/fund-explorer", // MF Category Browser
+    TAX_CALCULATOR: "/dashboard/tax-calculator", // Tax Impact Calculator
+    RISK_PROFILE: "/dashboard/risk-profile", // Risk Profile Quiz
     SETTINGS: "/dashboard/settings",
     PROFILE: "/dashboard/profile",
 } as const;

@@ -16,6 +16,7 @@ WealthyMinds is a premium, AI-powered **Wealth Intelligence Teller** designed fo
 ## 🛠 Tech Stack
 
 **Frontend & Core:**
+
 - **Framework:** Next.js 16 (App Router / React 19)
 - **Styling:** Tailwind CSS v4, custom glassmorphism, dynamic motion cards
 - **Charts & Animation:** Recharts, Framer Motion, React Three Fiber (R3F)
@@ -23,6 +24,7 @@ WealthyMinds is a premium, AI-powered **Wealth Intelligence Teller** designed fo
 - **State Management:** Zustand & local React state persistent overlays
 
 **Backend & Data:**
+
 - **Database:** PostgreSQL via Prisma (adapter-pg)
 - **Analytics Microservice:** Python 3.11+ & FastAPI (Scientific computing via Pandas, NumPy, SciPy)
 
@@ -41,6 +43,7 @@ cp .env.example .env
 ```
 
 #### Key Configurations:
+
 - **`DATABASE_URL`**: A PostgreSQL connection string (e.g., from Supabase or Neon.tech).
 - **`AUTH_SECRET`**: Session encryption token (generate via `openssl rand -base64 32`).
 - **`GOOGLE_AI_API_KEY`**: Obtain a key for free from [Google AI Studio](https://aistudio.google.com/app/apikey) to power live conversational responses.

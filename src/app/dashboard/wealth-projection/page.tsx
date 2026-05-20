@@ -1,16 +1,16 @@
 "use client";
 
-import { useState } from "react";
-import { motion } from "framer-motion";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
+import { motion, AnimatePresence } from "framer-motion";
 import {
     PageHeader,
     Card,
     CardHeader,
     CardTitle,
-    Button,
     Badge,
 } from "@/components/ui";
-import { pageTransition, staggerContainer, staggerItem } from "@/lib/motion";
+import { pageTransition } from "@/lib/motion";
 import {
     LineChart as LineChartIcon,
     Calculator,
@@ -20,7 +20,9 @@ import {
     TrendingUp,
     TrendingDown,
     Zap,
-    Percent,
+    Search,
+    Loader2,
+    X,
 } from "lucide-react";
 import {
     ResponsiveContainer,
@@ -33,21 +35,107 @@ import {
     Legend,
 } from "recharts";
 
-export default function WealthProjectionPage() {
-    // Inputs state
+interface SearchResult {
+    id: string;
+    name: string;
+    symbol: string;
+    type: string;
+    sector: string;
+}
+
+function MonteCarloContent() {
+    const searchParams = useSearchParams();
+    const urlName = searchParams.get("name");
+    const urlCagr = searchParams.get("cagr");
+    const urlVol = searchParams.get("vol");
+
+    // Inputs state — initialized from URL params if present
     const [sipAmount, setSipAmount] = useState<number>(15000);
     const [years, setYears] = useState<number>(15);
-    const [cagr, setCagr] = useState<number>(14); // Expected return %
-    const [volatility, setVolatility] = useState<number>(16); // Volatility %
+    const [cagr, setCagr] = useState<number>(urlCagr ? parseFloat(urlCagr) : 14);
+    const [volatility, setVolatility] = useState<number>(urlVol ? parseFloat(urlVol) : 16);
+    const [showInflationAdjusted, setShowInflationAdjusted] = useState(false);
+    const [inflationRate] = useState(6);
+
+    // Asset search state
+    const [selectedAssetName, setSelectedAssetName] = useState<string>(urlName || "");
+    const [searchQuery, setSearchQuery] = useState("");
+    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [detailsLoading, setDetailsLoading] = useState(false);
+    const [isFocused, setIsFocused] = useState(false);
+
+    // Debounced autocomplete search
+    useEffect(() => {
+        if (searchQuery.trim().length < 2) {
+            setSearchResults([]);
+            return;
+        }
+        const delay = setTimeout(async () => {
+            setSearchLoading(true);
+            try {
+                const res = await fetch(`/api/market/search?q=${encodeURIComponent(searchQuery)}`);
+                const data = await res.json();
+                if (data.success && data.content) {
+                    setSearchResults(data.content);
+                }
+            } catch (e) {
+                console.error("Search failed", e);
+            } finally {
+                setSearchLoading(false);
+            }
+        }, 300);
+        return () => clearTimeout(delay);
+    }, [searchQuery]);
+
+    // Handle selecting an asset from search results
+    const handleSelectAsset = async (item: SearchResult) => {
+        setSearchQuery("");
+        setSearchResults([]);
+        setDetailsLoading(true);
+        setSelectedAssetName(item.name);
+
+        try {
+            const url = `/api/market/details?name=${encodeURIComponent(item.name)}&type=${encodeURIComponent(item.type)}&symbol=${encodeURIComponent(item.symbol)}&id=${encodeURIComponent(item.id)}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.success && data.data) {
+                if (data.data.cagr3y) setCagr(data.data.cagr3y);
+                if (data.data.volatilityPercent) {
+                    setVolatility(data.data.volatilityPercent);
+                } else if (data.data.volatility === "Low") {
+                    setVolatility(8);
+                } else if (data.data.volatility === "High") {
+                    setVolatility(22);
+                } else {
+                    setVolatility(14);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch asset details", e);
+        } finally {
+            setDetailsLoading(false);
+        }
+    };
+
+    const clearSelectedAsset = () => {
+        setSelectedAssetName("");
+        setCagr(14);
+        setVolatility(16);
+    };
 
     // Calculations
+    const effectiveCagr = showInflationAdjusted
+        ? ((1 + cagr / 100) / (1 + inflationRate / 100) - 1) * 100
+        : cagr;
+
     const generateSimulationData = () => {
         const data = [];
         const totalMonths = years * 12;
         let expectedBalance = 0;
         let accumulatedInvested = 0;
 
-        const monthlyRate = cagr / 12 / 100;
+        const monthlyRate = effectiveCagr / 12 / 100;
 
         for (let month = 1; month <= totalMonths; month++) {
             accumulatedInvested += sipAmount;
@@ -91,7 +179,7 @@ export default function WealthProjectionPage() {
     const finalConservative = finalYearData ? finalYearData["Conservative Scenario"] : 0;
 
     const totalGains = finalExpected - finalInvested;
-    const fdOutperformance = cagr > 7.0 ? Math.min(99, Math.round(75 + (cagr - 7) * 3 - (volatility - 10) * 0.5)) : Math.round(cagr * 10);
+    const fdOutperformance = effectiveCagr > 7.0 ? Math.min(99, Math.round(75 + (effectiveCagr - 7) * 3 - (volatility - 10) * 0.5)) : Math.round(effectiveCagr * 10);
 
     return (
         <motion.div
@@ -114,6 +202,72 @@ export default function WealthProjectionPage() {
                         <CardTitle>Simulation Assumptions</CardTitle>
                     </div>
                 </CardHeader>
+
+                {/* Asset Search */}
+                <div className="mb-6 relative">
+                    <p className="text-xs font-bold uppercase tracking-wider text-text-secondary mb-2 flex items-center gap-1.5">
+                        <Search className="h-3.5 w-3.5 text-wealth-400" />
+                        Auto-Populate from Real Asset
+                    </p>
+                    <div className="relative max-w-lg">
+                        <Search className="absolute left-3 top-3 h-4 w-4 text-text-tertiary" />
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                            onFocus={() => setIsFocused(true)}
+                            onBlur={() => setTimeout(() => setIsFocused(false), 200)}
+                            placeholder="Search a stock or mutual fund to auto-fill CAGR & volatility..."
+                            className="w-full pl-10 pr-10 py-2.5 rounded-xl bg-surface-50 border border-border-subtle text-sm text-text-primary placeholder:text-text-tertiary focus:border-wealth-500 focus:outline-none transition-all"
+                        />
+                        {(searchLoading || detailsLoading) && (
+                            <Loader2 className="absolute right-3 top-3 h-4 w-4 text-wealth-400 animate-spin" />
+                        )}
+
+                        <AnimatePresence>
+                            {isFocused && searchResults.length > 0 && (
+                                <motion.div
+                                    initial={{ opacity: 0, y: 5 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: 5 }}
+                                    className="absolute left-0 right-0 top-full mt-1 max-h-52 overflow-y-auto rounded-xl bg-surface-100/95 backdrop-blur-xl border border-border-subtle shadow-2xl p-2 space-y-1 z-50"
+                                >
+                                    {searchResults.map((item) => (
+                                        <button
+                                            key={item.id}
+                                            onClick={() => handleSelectAsset(item)}
+                                            className="w-full text-left p-2.5 rounded-lg hover:bg-wealth-500/10 border border-transparent transition-all flex items-center justify-between group"
+                                        >
+                                            <div className="min-w-0">
+                                                <p className="text-xs font-bold text-text-primary truncate">{item.name}</p>
+                                                <p className="text-[10px] text-text-tertiary font-mono mt-0.5">{item.symbol} • {item.type}</p>
+                                            </div>
+                                            <Badge
+                                                variant={item.type === "Stock" ? "default" : "positive"}
+                                                className="text-[9px] ml-2 flex-shrink-0"
+                                            >
+                                                {item.type}
+                                            </Badge>
+                                        </button>
+                                    ))}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
+
+                    {/* Selected asset badge */}
+                    {selectedAssetName && (
+                        <div className="mt-2 flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-wealth-600/10 text-wealth-400 border border-wealth-500/20">
+                                <TrendingUp className="h-3 w-3" />
+                                Simulating: {selectedAssetName}
+                            </span>
+                            <button onClick={clearSelectedAsset} className="text-text-tertiary hover:text-text-primary transition-colors">
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
+                    )}
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     {/* Monthly SIP */}
@@ -219,6 +373,24 @@ export default function WealthProjectionPage() {
                             <span>30% (Extreme)</span>
                         </div>
                     </div>
+                </div>
+
+                {/* Inflation Toggle */}
+                <div className="mt-6 pt-4 border-t border-border-subtle flex items-center gap-3">
+                    <button
+                        onClick={() => setShowInflationAdjusted(!showInflationAdjusted)}
+                        className={`relative h-5 w-10 rounded-full transition-colors ${showInflationAdjusted ? "bg-wealth-500" : "bg-surface-200"}`}
+                    >
+                        <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition-transform ${showInflationAdjusted ? "translate-x-5" : ""}`} />
+                    </button>
+                    <span className="text-xs text-text-secondary">
+                        Adjust for inflation ({inflationRate}% CPI)
+                    </span>
+                    {showInflationAdjusted && (
+                        <span className="text-[10px] text-wealth-400 font-semibold bg-wealth-500/10 px-2 py-0.5 rounded-full">
+                            Real CAGR: {effectiveCagr.toFixed(1)}%
+                        </span>
+                    )}
                 </div>
             </Card>
 
@@ -400,5 +572,13 @@ export default function WealthProjectionPage() {
                 </div>
             </div>
         </motion.div>
+    );
+}
+
+export default function WealthProjectionPage() {
+    return (
+        <Suspense fallback={<div className="p-8 text-center text-text-tertiary">Loading Monte Carlo Simulator...</div>}>
+            <MonteCarloContent />
+        </Suspense>
     );
 }

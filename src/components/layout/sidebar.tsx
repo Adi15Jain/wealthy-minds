@@ -24,6 +24,10 @@ import {
     ChevronLeft,
     ChevronRight,
     Wallet,
+    Calculator,
+    Grid3X3,
+    Receipt,
+    Shield,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -63,6 +67,33 @@ const navigation: NavSection[] = [
                 label: "SIP Projections",
                 href: ROUTES.WEALTH_PROJECTION,
                 icon: LineChart,
+            },
+            {
+                label: "Goal Calculator",
+                href: ROUTES.GOAL_CALCULATOR,
+                icon: Target,
+                badge: "NEW",
+            },
+            {
+                label: "Fund Explorer",
+                href: ROUTES.FUND_EXPLORER,
+                icon: Grid3X3,
+                badge: "NEW",
+            },
+        ],
+    },
+    {
+        title: "Planning Tools",
+        items: [
+            {
+                label: "Tax Calculator",
+                href: ROUTES.TAX_CALCULATOR,
+                icon: Receipt,
+            },
+            {
+                label: "Risk Profile",
+                href: ROUTES.RISK_PROFILE,
+                icon: Shield,
             },
             {
                 label: "AI Chat Teller",
@@ -275,7 +306,7 @@ export function Sidebar() {
                         navigation[0].items[0], // Dashboard
                         navigation[1].items[0], // SIP Analyzer
                         navigation[1].items[1], // SIP Projections
-                        navigation[1].items[2], // AI Chat Teller
+                        navigation[2].items[2], // AI Chat Teller (now in Planning Tools)
                         bottomNavItems[0], // Settings
                     ].map((item) => {
                         const isActive = pathname === item.href;

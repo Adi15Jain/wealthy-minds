@@ -4,6 +4,7 @@ import { useUIStore } from "@/store";
 import { Sidebar } from "./sidebar";
 import { Topbar } from "./topbar";
 import { cn } from "@/lib/utils";
+import { OnboardingTutorial } from "@/components/ui/onboarding-tutorial";
 
 interface DashboardShellProps {
     children: React.ReactNode;
@@ -27,6 +28,8 @@ export function DashboardShell({ children }: DashboardShellProps) {
                     {children}
                 </main>
             </div>
+            <OnboardingTutorial />
         </div>
     );
 }
+

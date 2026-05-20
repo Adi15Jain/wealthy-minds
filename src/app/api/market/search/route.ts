@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { env } from "@/lib/env";
 
 export async function GET(request: NextRequest) {
     try {
@@ -10,12 +11,18 @@ export async function GET(request: NextRequest) {
         }
 
         const growwSearchUrl = `https://groww.in/v1/api/search/v1/entity?q=${encodeURIComponent(query)}&size=8`;
+
+        // Build headers with Groww API key auth if available
+        const headers: Record<string, string> = {
+            "Accept": "application/json",
+        };
+        if (env.GROWW_API_KEY) {
+            headers["Authorization"] = `Bearer ${env.GROWW_API_KEY}`;
+        }
         
         const response = await fetch(growwSearchUrl, {
             method: "GET",
-            headers: {
-                "Accept": "application/json",
-            },
+            headers,
         });
 
         if (!response.ok) {

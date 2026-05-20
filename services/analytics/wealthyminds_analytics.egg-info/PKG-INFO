@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: wealthyminds-analytics
+Version: 0.1.0
+Summary: WealthyMinds Analytics Microservice — Portfolio analytics, risk computation, and AI preprocessing.
+Requires-Python: >=3.11
+Requires-Dist: fastapi>=0.115.0
+Requires-Dist: uvicorn[standard]>=0.32.0
+Requires-Dist: pydantic>=2.10.0
+Requires-Dist: pydantic-settings>=2.7.0
+Requires-Dist: numpy>=2.0.0
+Requires-Dist: pandas>=2.2.0
+Requires-Dist: scipy>=1.14.0
+Requires-Dist: httpx>=0.28.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.24; extra == "dev"
+Requires-Dist: ruff>=0.8.0; extra == "dev"

@@ -1,0 +1,437 @@
+// This is the WealthyMinds Prisma schema.
+// It defines the complete data model for the platform.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ── User & Authentication ────────────────────────────────────
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String    @unique
+  name                String?
+  passwordHash        String?
+  image               String?
+  emailVerified       DateTime?
+  onboardingComplete  Boolean   @default(false)
+  riskProfile         RiskProfile?
+  
+  // Relations
+  portfolios          Portfolio[]
+  goals               Goal[]
+  sips                SIP[]
+  journalEntries      JournalEntry[]
+  aiInsights          AIInsight[]
+  behavioralMetrics   BehavioralMetric[]
+  reports             Report[]
+  sessions            Session[]
+  accounts            Account[]
+  preferences         UserPreferences?
+  
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+  
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  sessionToken String   @unique
+  expiresAt    DateTime
+  
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model UserPreferences {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  theme             String   @default("dark")
+  currency          String   @default("INR")
+  language          String   @default("en")
+  dashboardLayout   String[] @default([])
+  
+  // Notification preferences
+  emailNotifs       Boolean  @default(true)
+  pushNotifs        Boolean  @default(true)
+  sipReminders      Boolean  @default(true)
+  goalMilestones    Boolean  @default(true)
+  marketAlerts      Boolean  @default(false)
+  aiInsightNotifs   Boolean  @default(true)
+  
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+// ── Portfolio & Holdings ─────────────────────────────────────
+
+model Portfolio {
+  id               String    @id @default(cuid())
+  userId           String
+  name             String
+  description      String?
+  isDefault        Boolean   @default(false)
+  
+  // Computed / cached values
+  totalValue       Float     @default(0)
+  totalInvested    Float     @default(0)
+  totalReturns     Float     @default(0)
+  returnPercentage Float     @default(0)
+  xirr             Float     @default(0)
+  
+  // Relations
+  holdings         Holding[]
+  transactions     Transaction[]
+  analyticsSnapshots AnalyticsSnapshot[]
+  
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  lastSyncedAt     DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@map("portfolios")
+}
+
+model Holding {
+  id               String       @id @default(cuid())
+  portfolioId      String
+  name             String
+  ticker           String
+  type             InvestmentType
+  assetClass       AssetClass
+  
+  quantity         Float
+  avgBuyPrice      Float
+  currentPrice     Float        @default(0)
+  currentValue     Float        @default(0)
+  investedValue    Float        @default(0)
+  returns          Float        @default(0)
+  returnPercentage Float        @default(0)
+  allocation       Float        @default(0)
+  
+  sector           String?
+  exchange         String?
+  isin             String?
+  
+  // Relations
+  portfolio        Portfolio    @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  sips             SIP[]
+  transactions     Transaction[]
+  
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@map("holdings")
+}
+
+model Transaction {
+  id            String          @id @default(cuid())
+  portfolioId   String
+  holdingId     String?
+  type          TransactionType
+  
+  amount        Float
+  units         Float?
+  price         Float?
+  fees          Float           @default(0)
+  
+  date          DateTime
+  notes         String?
+  
+  portfolio     Portfolio       @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  holding       Holding?        @relation(fields: [holdingId], references: [id])
+  
+  createdAt     DateTime        @default(now())
+
+  @@map("transactions")
+}
+
+// ── SIP (Systematic Investment Plan) ─────────────────────────
+
+model SIP {
+  id              String     @id @default(cuid())
+  userId          String
+  holdingId       String?
+  name            String
+  amount          Float
+  frequency       SIPFrequency
+  startDate       DateTime
+  nextDate        DateTime
+  status          SIPStatus  @default(ACTIVE)
+  
+  totalInvested   Float      @default(0)
+  currentValue    Float      @default(0)
+  
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  holding         Holding?   @relation(fields: [holdingId], references: [id])
+  
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@map("sips")
+}
+
+// ── Financial Goals ──────────────────────────────────────────
+
+model Goal {
+  id                  String     @id @default(cuid())
+  userId              String
+  name                String
+  type                GoalType
+  targetAmount        Float
+  currentAmount       Float      @default(0)
+  deadline            DateTime
+  monthlyContribution Float      @default(0)
+  progress            Float      @default(0)
+  status              GoalStatus @default(ON_TRACK)
+  priority            Priority   @default(MEDIUM)
+  linkedHoldings      String[]   @default([])
+  
+  user                User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt           DateTime   @default(now())
+  updatedAt           DateTime   @updatedAt
+
+  @@map("goals")
+}
+
+// ── Financial Journal ────────────────────────────────────────
+
+model JournalEntry {
+  id              String   @id @default(cuid())
+  userId          String
+  title           String
+  content         String
+  mood            Mood
+  tags            String[] @default([])
+  linkedDecisions String[] @default([])
+  
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("journal_entries")
+}
+
+// ── AI Insights ──────────────────────────────────────────────
+
+model AIInsight {
+  id         String         @id @default(cuid())
+  userId     String
+  type       InsightType
+  title      String
+  summary    String
+  detail     String
+  severity   InsightSeverity
+  category   String
+  confidence Float
+  isRead     Boolean        @default(false)
+  actionable Boolean        @default(false)
+  metadata   Json?
+  
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt  DateTime       @default(now())
+
+  @@map("ai_insights")
+}
+
+// ── Analytics & Behavioral ───────────────────────────────────
+
+model AnalyticsSnapshot {
+  id              String   @id @default(cuid())
+  portfolioId     String
+  
+  totalValue      Float
+  totalInvested   Float
+  returns         Float
+  riskScore       Float?
+  volatility      Float?
+  sharpeRatio     Float?
+  allocationJson  Json?
+  
+  portfolio       Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+  
+  snapshotDate    DateTime @default(now())
+
+  @@map("analytics_snapshots")
+}
+
+model BehavioralMetric {
+  id           String        @id @default(cuid())
+  userId       String
+  metric       String
+  score        Float
+  trend        MetricTrend
+  observations String[]      @default([])
+  period       String
+  
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt    DateTime      @default(now())
+
+  @@map("behavioral_metrics")
+}
+
+// ── Reports ──────────────────────────────────────────────────
+
+model Report {
+  id        String     @id @default(cuid())
+  userId    String
+  title     String
+  type      ReportType
+  data      Json?
+  fileUrl   String?
+  
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime   @default(now())
+
+  @@map("reports")
+}
+
+// ── Enums ────────────────────────────────────────────────────
+
+enum RiskProfile {
+  CONSERVATIVE
+  MODERATE
+  BALANCED
+  GROWTH
+  AGGRESSIVE
+}
+
+enum InvestmentType {
+  MUTUAL_FUND
+  STOCK
+  ETF
+  FIXED_DEPOSIT
+  PPF
+  NPS
+  GOLD
+  BOND
+  REIT
+}
+
+enum AssetClass {
+  EQUITY
+  DEBT
+  GOLD
+  REAL_ESTATE
+  CASH
+  INTERNATIONAL
+  ALTERNATIVE
+}
+
+enum TransactionType {
+  BUY
+  SELL
+  DIVIDEND
+  SIP
+  SWITCH
+  REDEMPTION
+}
+
+enum SIPFrequency {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum SIPStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum GoalType {
+  RETIREMENT
+  EDUCATION
+  HOUSE
+  EMERGENCY_FUND
+  TRAVEL
+  VEHICLE
+  WEDDING
+  CUSTOM
+}
+
+enum GoalStatus {
+  ON_TRACK
+  BEHIND
+  AHEAD
+  COMPLETED
+}
+
+enum Priority {
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum Mood {
+  CONFIDENT
+  ANXIOUS
+  NEUTRAL
+  EXCITED
+  FEARFUL
+}
+
+enum InsightType {
+  PORTFOLIO_SUMMARY
+  BEHAVIORAL_OBSERVATION
+  RISK_NARRATIVE
+  RECOMMENDATION
+  OPTIMIZATION
+  MARKET_CONTEXT
+  GOAL_UPDATE
+}
+
+enum InsightSeverity {
+  INFO
+  WARNING
+  ACTION
+  POSITIVE
+}
+
+enum MetricTrend {
+  IMPROVING
+  DECLINING
+  STABLE
+}
+
+enum ReportType {
+  MONTHLY_SUMMARY
+  QUARTERLY_PERFORMANCE
+  ANNUAL_TAX
+  CUSTOM
+}

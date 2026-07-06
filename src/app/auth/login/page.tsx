@@ -1,14 +1,56 @@
 "use client";
 
+import { Suspense, useState, type FormEvent } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { ROUTES } from "@/lib/constants";
-import { Button, Card, GlassPanel } from "@/components/ui";
-import { fadeInUp, staggerContainer, staggerItem } from "@/lib/motion";
+import { Button, Card } from "@/components/ui";
+import { staggerContainer, staggerItem } from "@/lib/motion";
 import { signIn } from "next-auth/react";
-import { ArrowRight, Mail } from "lucide-react";
+import { AlertCircle, ArrowRight, Mail } from "lucide-react";
 
-export default function LoginPage() {
+function LoginForm() {
+    const router = useRouter();
+    const searchParams = useSearchParams();
+    const callbackUrl = searchParams.get("callbackUrl") ?? ROUTES.DASHBOARD;
+
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [error, setError] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        if (isLoading) return;
+        setError(null);
+
+        if (!email.trim() || !password) {
+            setError("Please enter your email and password.");
+            return;
+        }
+
+        setIsLoading(true);
+        try {
+            const result = await signIn("credentials", {
+                email: email.trim().toLowerCase(),
+                password,
+                redirect: false,
+            });
+
+            if (result?.error) {
+                setError("Invalid email or password");
+                setIsLoading(false);
+                return;
+            }
+
+            router.push(callbackUrl);
+        } catch {
+            setError("Something went wrong. Please try again.");
+            setIsLoading(false);
+        }
+    };
+
     return (
         <div className="min-h-screen flex items-center justify-center bg-surface-0 relative overflow-hidden">
             {/* Background effects */}
@@ -57,7 +99,9 @@ export default function LoginPage() {
                             variant="outline"
                             className="w-full mb-4"
                             size="lg"
-                            onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
+                            onClick={() =>
+                                signIn("google", { callbackUrl })
+                            }
                         >
                             <svg className="h-5 w-5 mr-2" viewBox="0 0 24 24">
                                 <path
@@ -91,40 +135,62 @@ export default function LoginPage() {
                             </div>
                         </div>
 
-                        {/* Email form placeholder */}
-                        <div className="space-y-4">
+                        {/* Email + password form */}
+                        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+                            {error && (
+                                <div
+                                    role="alert"
+                                    className="flex items-start gap-2.5 p-3 rounded-lg bg-negative-500/10 border border-negative-500/30"
+                                >
+                                    <AlertCircle className="h-4 w-4 text-negative-400 flex-shrink-0 mt-0.5" />
+                                    <p className="text-sm text-negative-400">
+                                        {error}
+                                    </p>
+                                </div>
+                            )}
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                <label
+                                    htmlFor="login-email"
+                                    className="block text-sm font-medium text-text-secondary mb-1.5"
+                                >
                                     Email
                                 </label>
                                 <div className="flex items-center h-11 px-4 rounded-lg bg-surface-200 border border-border-subtle focus-within:border-wealth-500/50 transition-colors">
                                     <Mail className="h-4 w-4 text-text-tertiary mr-3" />
                                     <input
+                                        id="login-email"
                                         type="email"
+                                        autoComplete="email"
                                         placeholder="you@example.com"
+                                        value={email}
+                                        onChange={(e) =>
+                                            setEmail(e.target.value)
+                                        }
                                         className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary outline-none"
                                     />
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                <label
+                                    htmlFor="login-password"
+                                    className="block text-sm font-medium text-text-secondary mb-1.5"
+                                >
                                     Password
                                 </label>
                                 <input
+                                    id="login-password"
                                     type="password"
+                                    autoComplete="current-password"
                                     placeholder="••••••••"
+                                    value={password}
+                                    onChange={(e) =>
+                                        setPassword(e.target.value)
+                                    }
                                     className="w-full h-11 px-4 rounded-lg bg-surface-200 border border-border-subtle focus:border-wealth-500/50 transition-colors text-sm text-text-primary placeholder:text-text-tertiary outline-none"
                                 />
                             </div>
 
-                            <div className="flex items-center justify-between">
-                                <label className="flex items-center gap-2 text-sm text-text-secondary">
-                                    <input
-                                        type="checkbox"
-                                        className="rounded border-border-subtle"
-                                    />
-                                    Remember me
-                                </label>
+                            <div className="flex items-center justify-end">
                                 <Link
                                     href={ROUTES.AUTH.FORGOT_PASSWORD}
                                     className="text-sm text-wealth-400 hover:text-wealth-300"
@@ -133,11 +199,16 @@ export default function LoginPage() {
                                 </Link>
                             </div>
 
-                            <Button className="w-full" size="lg">
+                            <Button
+                                type="submit"
+                                className="w-full"
+                                size="lg"
+                                isLoading={isLoading}
+                            >
                                 Sign In
                                 <ArrowRight className="h-4 w-4" />
                             </Button>
-                        </div>
+                        </form>
 
                         <p className="text-center text-sm text-text-secondary mt-6">
                             Don&apos;t have an account?{" "}
@@ -152,5 +223,13 @@ export default function LoginPage() {
                 </motion.div>
             </motion.div>
         </div>
+    );
+}
+
+export default function LoginPage() {
+    return (
+        <Suspense fallback={null}>
+            <LoginForm />
+        </Suspense>
     );
 }

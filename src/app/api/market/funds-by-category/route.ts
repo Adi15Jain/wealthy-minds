@@ -1,21 +1,65 @@
-import { NextRequest, NextResponse } from "next/server";
-import { env } from "@/lib/env";
+import { NextRequest } from "next/server";
+import { ok, fail, requireUser } from "@/lib/api/respond";
+import { rateLimit } from "@/lib/api/rate-limit";
+import { generateJsonArray, hasAiProvider } from "@/lib/ai-client";
 
 /**
  * GET /api/market/funds-by-category
  * Returns top-performing mutual funds for a given category.
  */
+
+// Must match CATEGORIES in src/app/dashboard/fund-explorer/page.tsx exactly.
+const ALLOWED_CATEGORIES = [
+    "Large Cap",
+    "Mid Cap",
+    "Small Cap",
+    "Flexi Cap",
+    "ELSS (Tax Saving)",
+    "Index Fund",
+    "Debt / Bond",
+    "International",
+] as const;
+
+interface Fund {
+    name: string;
+    symbol: string;
+    amc: string;
+    cagr1y: number;
+    cagr3y: number;
+    cagr5y: number;
+    expenseRatio: number;
+    aum: string;
+    riskLabel: string;
+    rating: number;
+    minSIP: number;
+}
+
 export async function GET(request: NextRequest) {
-    try {
-        const { searchParams } = new URL(request.url);
-        const category = searchParams.get("category") || "Large Cap";
+    const userId = await requireUser();
+    if (!userId) return fail("UNAUTHORIZED", "Sign in required", 401);
 
-        const apiKey = env.GOOGLE_AI_API_KEY;
-        if (!apiKey) {
-            return NextResponse.json({ success: false, message: "GOOGLE_AI_API_KEY not configured." }, { status: 500 });
-        }
+    const limited = rateLimit(`market-funds:${userId}`, {
+        limit: 10,
+        windowMs: 60_000,
+    });
+    if (!limited.allowed) {
+        return fail("RATE_LIMITED", "Too many requests. Please slow down.", 429, {
+            retryAfterSeconds: limited.retryAfterSeconds,
+        });
+    }
 
-        const prompt = `You are a professional Indian mutual fund data system. Return a JSON array of the top 5 best-performing mutual funds in the "${category}" category in India.
+    const { searchParams } = new URL(request.url);
+    const category = searchParams.get("category") ?? "Large Cap";
+
+    if (!(ALLOWED_CATEGORIES as readonly string[]).includes(category)) {
+        return fail("BAD_REQUEST", "Unknown fund category.", 400);
+    }
+
+    if (!hasAiProvider()) {
+        return fail("AI_UNAVAILABLE", "Fund data service is not configured.", 503);
+    }
+
+    const prompt = `You are a professional Indian mutual fund data system. Return a JSON array of the top 5 best-performing mutual funds in the "${category}" category in India.
 
 For each fund, provide ACCURATE, real-world performance data:
 {
@@ -35,26 +79,11 @@ For each fund, provide ACCURATE, real-world performance data:
 Use the most recent available data. Only include direct growth plans.
 Return ONLY the raw JSON array.`;
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-        const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { responseMimeType: "application/json" },
-            }),
-        });
-
-        if (!response.ok) throw new Error(`Gemini API returned status ${response.status}`);
-
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!text) throw new Error("Empty Gemini response");
-
-        const funds = JSON.parse(text.trim());
-        return NextResponse.json({ success: true, data: Array.isArray(funds) ? funds : [], source: "gemini" });
-    } catch (error: any) {
-        console.error("Funds by category API Error:", error);
-        return NextResponse.json({ success: false, message: error.message }, { status: 500 });
+    try {
+        const funds = await generateJsonArray<Fund>(prompt);
+        return ok(funds, { cacheSeconds: 3600 });
+    } catch (error) {
+        console.error("Funds by category API error:", error);
+        return fail("UPSTREAM_ERROR", "Failed to fetch funds.", 502);
     }
 }

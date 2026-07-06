@@ -38,10 +38,18 @@ const buttonVariants = cva(
     },
 );
 
+/**
+ * Native button attributes minus the handlers whose names collide with
+ * framer-motion's MotionProps — lets the same props spread safely into
+ * both <button> and <motion.button>.
+ */
+type SafeButtonAttributes = Omit<
+    ButtonHTMLAttributes<HTMLButtonElement>,
+    "onDrag" | "onDragStart" | "onDragEnd" | "onAnimationStart"
+>;
+
 export interface ButtonProps
-    extends
-        ButtonHTMLAttributes<HTMLButtonElement>,
-        VariantProps<typeof buttonVariants> {
+    extends SafeButtonAttributes, VariantProps<typeof buttonVariants> {
     isLoading?: boolean;
     motionless?: boolean;
 }
@@ -93,12 +101,12 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
 
         return (
             <motion.button
-                ref={ref as any}
+                ref={ref}
                 className={classes}
                 disabled={isLoading || props.disabled}
                 whileHover={buttonHover}
                 whileTap={buttonTap}
-                {...(props as any)}
+                {...props}
             >
                 {isLoading ? (
                     <span className="inline-flex items-center gap-2">

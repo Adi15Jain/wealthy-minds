@@ -9,6 +9,7 @@ app/api/v1/endpoints/projection.py
 app/api/v1/endpoints/risk.py
 app/core/__init__.py
 app/core/config.py
+app/services/groww_client.py
 wealthyminds_analytics.egg-info/PKG-INFO
 wealthyminds_analytics.egg-info/SOURCES.txt
 wealthyminds_analytics.egg-info/dependency_links.txt

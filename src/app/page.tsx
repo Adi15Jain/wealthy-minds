@@ -1,7 +1,13 @@
 "use client";
 
-import { motion, useScroll, useTransform } from "framer-motion";
+import {
+    motion,
+    useReducedMotion,
+    useScroll,
+    useTransform,
+} from "framer-motion";
 import { useRef } from "react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { Button } from "@/components/ui";
 import { ROUTES } from "@/lib/constants";
@@ -19,9 +25,16 @@ import {
 } from "lucide-react";
 import { staggerContainer, staggerItem, scrollFadeUp } from "@/lib/motion";
 
+// 3D ambient layer — client-only, code-split, graceful null fallback.
+const AmbientScene = dynamic(
+    () => import("@/components/3d/ambient-scene").then((m) => m.AmbientScene),
+    { ssr: false, loading: () => null },
+);
+
 // ── Hero Section ─────────────────────────────────────────────
 function HeroSection() {
     const ref = useRef<HTMLDivElement>(null);
+    const prefersReducedMotion = useReducedMotion();
     const { scrollYProgress } = useScroll({
         target: ref,
         offset: ["start start", "end start"],
@@ -38,6 +51,10 @@ function HeroSection() {
         >
             {/* Animated background */}
             <div className="absolute inset-0">
+                {/* Subtle 3D particle layer — skipped entirely for reduced motion */}
+                {prefersReducedMotion === false && (
+                    <AmbientScene className="opacity-40" />
+                )}
                 {/* Primary gradient orb */}
                 <motion.div
                     className="absolute top-1/4 left-1/4 w-[600px] h-[600px] rounded-full animate-glow-pulse"
@@ -504,21 +521,9 @@ export default function LandingPage() {
                     <div className="hidden md:flex items-center gap-8 text-sm text-text-secondary">
                         <a
                             href="#features"
-                            className="hover:text-text-primary transition-colors"
+                            className="hover:text-text-primary transition-colors rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-wealth-500/50"
                         >
                             Features
-                        </a>
-                        <a
-                            href="#"
-                            className="hover:text-text-primary transition-colors"
-                        >
-                            Pricing
-                        </a>
-                        <a
-                            href="#"
-                            className="hover:text-text-primary transition-colors"
-                        >
-                            About
                         </a>
                     </div>
 

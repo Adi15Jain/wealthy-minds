@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { env } from "@/lib/env";
+import { fail, requireUser } from "@/lib/api/respond";
+import { rateLimit } from "@/lib/api/rate-limit";
+import { generateText, hasAiProvider } from "@/lib/ai-client";
+
+const MAX_PROMPT_LENGTH = 4000;
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_HISTORY_MESSAGE_LENGTH = 2000;
 
 const SYSTEM_INSTRUCTION = `You are WealthyMinds AI — an intelligent, premium financial "Teller" focused on long-term wealth creation and disciplined investing for Indian and global investors.
 
@@ -11,7 +17,31 @@ Core principles you MUST follow:
 - Never give direct buy/sell financial advisory recommendations for specific assets. Always frame your analysis as "educational insights and past-performance predictions."
 - Answer questions in clean Markdown, with sections, bullet points, and key statistics formatted clearly.`;
 
+interface HistoryMessage {
+    role: string;
+    content: string;
+}
+
+function parseHistory(raw: unknown): HistoryMessage[] | null {
+    if (raw === undefined || raw === null) return [];
+    if (!Array.isArray(raw) || raw.length > MAX_HISTORY_MESSAGES) return null;
+    const history: HistoryMessage[] = [];
+    for (const item of raw) {
+        if (typeof item !== "object" || item === null) return null;
+        const { role, content } = item as Record<string, unknown>;
+        if (typeof role !== "string" || typeof content !== "string") {
+            return null;
+        }
+        if (content.length > MAX_HISTORY_MESSAGE_LENGTH) return null;
+        history.push({ role, content });
+    }
+    return history;
+}
+
 export async function GET() {
+    const userId = await requireUser();
+    if (!userId) return fail("UNAUTHORIZED", "Sign in required", 401);
+
     return NextResponse.json({
         success: true,
         message: "WealthyMinds AI Teller API is active and ready.",
@@ -20,128 +50,102 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
-    try {
-        const body = await request.json();
-        const { prompt, history, type } = body;
+    const userId = await requireUser();
+    if (!userId) return fail("UNAUTHORIZED", "Sign in required", 401);
 
-        if (!prompt) {
-            return NextResponse.json(
-                { code: "BAD_REQUEST", message: "Prompt is required." },
-                { status: 400 },
-            );
-        }
-
-        const apiKey = env.GOOGLE_AI_API_KEY;
-
-        if (!apiKey) {
-            console.warn("GOOGLE_AI_API_KEY is not configured. Falling back to local smart heuristic response.");
-            return NextResponse.json({
-                success: true,
-                text: getFallbackResponse(prompt, type),
-                source: "fallback",
-            });
-        }
-
-        // Format prompt with history if available
-        let fullPrompt = `${SYSTEM_INSTRUCTION}\n\n`;
-        if (history && Array.isArray(history)) {
-            fullPrompt += "Here is the conversation history so far:\n";
-            history.forEach((msg: { role: string; content: string }) => {
-                fullPrompt += `${msg.role === "user" ? "User" : "WealthyMinds AI"}: ${msg.content}\n`;
-            });
-            fullPrompt += "\n";
-        }
-        fullPrompt += `User's latest question: ${prompt}\n\nWealthyMinds AI:`;
-
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-        const response = await fetch(url, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-                contents: [
-                    {
-                        parts: [
-                            {
-                                text: fullPrompt,
-                            },
-                        ],
-                    },
-                ],
-            }),
+    const limited = rateLimit(`ai-insights:${userId}`, {
+        limit: 10,
+        windowMs: 60_000,
+    });
+    if (!limited.allowed) {
+        return fail("RATE_LIMITED", "Too many requests. Please slow down.", 429, {
+            retryAfterSeconds: limited.retryAfterSeconds,
         });
+    }
 
-        if (!response.ok) {
-            const errText = await response.text();
-            console.error("Gemini API error:", errText);
-            throw new Error(`Gemini API returned status ${response.status}`);
-        }
+    const body: unknown = await request.json().catch(() => null);
+    if (typeof body !== "object" || body === null) {
+        return fail("BAD_REQUEST", "Request body must be JSON.", 400);
+    }
+    const { prompt, history: rawHistory, type } = body as Record<string, unknown>;
 
-        const data = await response.json();
-        const aiText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (typeof prompt !== "string" || prompt.trim().length === 0) {
+        return fail("BAD_REQUEST", "Prompt is required.", 400);
+    }
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+        return fail(
+            "BAD_REQUEST",
+            `Prompt must be at most ${MAX_PROMPT_LENGTH} characters.`,
+            400,
+        );
+    }
+    const history = parseHistory(rawHistory);
+    if (history === null) {
+        return fail("BAD_REQUEST", "History is malformed or too long.", 400);
+    }
+    const promptType =
+        typeof type === "string" ? type.slice(0, 40) : undefined;
 
-        if (!aiText) {
-            throw new Error("Empty response from Gemini API");
-        }
+    if (!hasAiProvider()) {
+        return NextResponse.json({
+            success: true,
+            text: getFallbackResponse(promptType),
+            source: "fallback",
+        });
+    }
+
+    try {
+        // System instruction rides with the final user turn so history keeps
+        // strict user/model alternation (Gemini rejects consecutive same-role
+        // turns).
+        const aiText = await generateText(
+            `${SYSTEM_INSTRUCTION}\n\nUser's latest question: ${prompt}`,
+            {
+                history: history.map((message) => ({
+                    role: message.role,
+                    text: message.content,
+                })),
+            },
+        );
 
         return NextResponse.json({
             success: true,
             text: aiText,
-            source: "gemini",
+            source: "ai",
         });
-
-    } catch (error: any) {
-        console.error("AI Route Error:", error);
-        // Fallback gracefully so the UI never breaks
+    } catch (error) {
+        console.error("AI insights route error:", error);
+        // Graceful degradation: the chat UI stays functional with honest
+        // general guidance instead of a hard error.
         return NextResponse.json({
             success: true,
-            text: `### Technical Error Connected to API\nWe encountered a connection issue while communicating with our advanced prediction models. However, based on general historical stock and mutual fund principles:\n\n* **SIP Superiority**: Keeping a disciplined SIP for 10+ years reduces volatility by averaging down during market bottoms.\n* **Asset Diversification**: Allocating 65% in large/mid-cap equities and 35% in high-yield corporate bonds or gold provides optimal risk-adjusted returns.\n* **Growth Focus**: Index funds and flexi-cap schemes generally perform best in growing emerging economies.\n\n*Please verify your Google AI Studio API key in the environmental variables.*`,
-            source: "error-fallback",
+            text: getFallbackResponse(promptType),
+            source: "fallback",
         });
     }
 }
 
-// Highly polished, smart fallback responses to keep the UX premium and completely functional
-function getFallbackResponse(prompt: string, type?: string): string {
-    const promptLower = prompt.toLowerCase();
-    
-    if (type === "comparison" || promptLower.includes("compare") || promptLower.includes("vs")) {
-        return `### 📊 Comparative Analysis: Performance & Projections
+/**
+ * Honest fallback shown when live AI is unavailable. Deliberately contains
+ * no invented performance figures, returns, or statistics.
+ */
+function getFallbackResponse(type?: string): string {
+    const header = `### Live AI is currently unavailable\n\nWe could not reach our AI engine for a live analysis of your question, so here is general, time-tested investing guidance instead:\n\n`;
 
-Based on long-term historical market trends in the Indian mutual fund space, here is our comparative evaluation:
+    if (type === "comparison") {
+        return `${header}* **How to compare funds yourself**: Look beyond last year's return — compare rolling returns across full market cycles, expense ratios, maximum drawdown, and how long the fund manager has run the strategy.
+* **Risk-adjusted lens**: A fund with slightly lower returns but much lower volatility is often the better long-term SIP choice, because it is easier to stay invested through corrections.
+* **Diversification beats picking a single winner**: Splitting a SIP across two differentiated funds (for example, one broad-market and one style-differentiated) reduces the impact of any single manager underperforming.
+* **Costs compound too**: Prefer direct plans and lower expense ratios — fees are one of the few factors you fully control.
 
-1. **Returns Profile**: High-quality **Flexi Cap & Mid Cap funds** (like Parag Parikh Flexi Cap and HDFC Mid Cap Opportunities) have historically registered **14.5% - 16.2% CAGR** over a 10-year period, significantly outperforming **NIFTY 50 Index funds** (which register ~12.3% CAGR).
-2. **Risk and Consistency**: 
-   * **Index Funds**: Offer low tracking error, lower expense ratios (0.1% - 0.2%), and lower drawdowns during bear markets.
-   * **Mid/Small Cap Funds**: Suffer higher peak-to-trough drawdowns (often 25-35% during corrections) but recover sharply in economic expansions, exhibiting a higher Sharpe ratio of ~1.35.
-3. **The SIP Verdict**: 
-   For a **10+ year SIP**, active Flexi Cap schemes tend to provide the best risk-adjusted performance due to their dynamic asset allocation across sectors and international diversification.
-
-*Disclaimer: Past performance is not a guarantee of future returns. Perform detailed research before allocating capital.*`;
+*This is general educational guidance, not a live analysis of the specific assets you asked about. Please try again shortly for a full AI comparison.*`;
     }
 
-    if (promptLower.includes("sip") || promptLower.includes("month") || promptLower.includes("predict")) {
-        return `### 📈 Long-Term SIP Projections & Predictor
+    return `${header}* **Stay systematic**: SIPs remove market-timing decisions and average your purchase cost across market cycles.
+* **Match risk to horizon**: Equity suits long horizons; keep near-term needs in debt or fixed-income instruments.
+* **Diversify sensibly**: Spread across asset classes and, within equity, across market caps and sectors rather than concentrating in one theme.
+* **Behavior matters most**: Avoid panic-selling during drawdowns and avoid chasing recent winners — discipline usually contributes more to outcomes than fund selection.
+* **Control costs**: Prefer low expense ratios and direct plans; verify facts with official AMC or exchange sources.
 
-Systematic Investment Plans (SIPs) are the ultimate tool for retail investors. Here is the predictive breakdown of a long-term SIP:
-
-* **Rupee Cost Averaging**: When markets correct, your monthly SIP buys more units, which effectively lowers your average buy price. When the market rallies, those units yield exponential gains.
-* **15-15-15 Rule**: Investing **₹15,000 monthly** for **15 years** at an expected CAGR of **15%** compiles into approximately **₹1 Crore** (with ₹27 Lakhs principal and ~₹73 Lakhs capital gains).
-* **Downside Shielding**: Over any rolling 7-year period in history, the probability of yielding negative returns in a NIFTY 50 SIP is virtually **0%**.
-
-**Actionable Advice**: Choose a scheme that exhibits high *Sortino/Sharpe ratios* and consistent *rolling returns* rather than just looking at the previous year's chart.`;
-    }
-
-    return `### 🧠 WealthyMinds AI Teller Intelligence
-
-Greetings! As your dedicated Wealth Intelligence Teller, I have processed your inquiry. 
-
-Here are key long-term insights:
-* **The Compounding Curve**: Wealth growth is highly back-loaded. A 20-year investment makes nearly 60% of its total growth in the final 5 years.
-* **Risk vs. Consistency**: High CAGR is useless if you panic-sell during a drawdown. Analyze the **Max Drawdown** and **Volatility (Std Dev)** of your schemes. A scheme with 14% return and low volatility is often superior to a 16% return scheme with extreme volatility.
-* **SIP vs. Lumpsum**: SIP is historically superior for volatile assets like stocks and mid-cap mutual funds, while Lumpsum is better suited for low-volatility bonds or fixed-income assets.
-
-Feel free to ask me to compare specific funds or run Monte Carlo models!`;
+*This is general educational guidance, not a live analysis of your query. Please try again shortly.*`;
 }

@@ -1,0 +1,16 @@
+node_modules
+.next
+.git
+.env
+.env.local
+.env.*.local
+npm-debug.log*
+services/analytics/venv
+services/analytics/__pycache__
+**/__pycache__
+*.pyc
+.vscode
+.claude
+tsconfig.tsbuildinfo
+README.md
+docs

@@ -3,6 +3,8 @@
  * Centralized prompt templates with context engineering for Google AI Studio.
  */
 
+import { generateText, generateJson } from "@/lib/ai-client";
+
 // ── Base Context ─────────────────────────────────────────────
 export const SYSTEM_CONTEXT = `You are WealthyMinds AI — an intelligent financial assistant focused on long-term wealth creation and disciplined investing for Indian investors.
 
@@ -138,27 +140,17 @@ export interface AIProvider {
 }
 
 /**
- * Google AI Studio provider (to be implemented with actual API integration).
+ * Delegates to the multi-provider AI client in src/lib/ai-client.ts, which owns
+ * provider selection (Groq → Gemini → OpenRouter), key handling, timeouts,
+ * retries, and fallback. Named GoogleAIProvider for backward compatibility.
  */
 export class GoogleAIProvider implements AIProvider {
-    private apiKey: string;
-    private model: string;
-
-    constructor(apiKey: string, model = "gemini-2.0-flash") {
-        this.apiKey = apiKey;
-        this.model = model;
-    }
-
     async generateText(prompt: string): Promise<string> {
-        // TODO: Implement actual Google AI Studio API call
-        // POST https://generativelanguage.googleapis.com/v1/models/{model}:generateContent
-        console.log(`[AI] Generating text with ${this.model}`);
-        return "AI response placeholder — integrate Google AI Studio API";
+        return generateText(prompt);
     }
 
-    async generateStructured<T>(prompt: string, _schema: object): Promise<T> {
-        const text = await this.generateText(prompt);
-        return JSON.parse(text) as T;
+    async generateStructured<T>(prompt: string): Promise<T> {
+        return generateJson<T>(prompt);
     }
 }
 

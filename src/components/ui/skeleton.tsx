@@ -34,6 +34,10 @@ export function SkeletonCard({ className }: SkeletonProps) {
 }
 
 // ── Skeleton Chart ───────────────────────────────────────────
+// Deterministic pseudo-random sizes — keeps SSR/CSR markup identical.
+const BAR_HEIGHTS = [40, 65, 50, 80, 55, 70, 45, 75];
+const LINE_WIDTHS = [92, 78, 86, 72, 95, 81];
+
 export function SkeletonChart({ className }: SkeletonProps) {
     return (
         <div className={cn("card-surface p-6 space-y-4", className)}>
@@ -46,7 +50,9 @@ export function SkeletonChart({ className }: SkeletonProps) {
                     <Skeleton
                         key={i}
                         className="flex-1 rounded-t-md"
-                        style={{ height: `${30 + Math.random() * 70}%` }}
+                        style={{
+                            height: `${BAR_HEIGHTS[i % BAR_HEIGHTS.length]}%`,
+                        }}
                     />
                 ))}
             </div>
@@ -65,7 +71,9 @@ export function SkeletonLines({
                 <Skeleton
                     key={i}
                     className="h-4"
-                    style={{ width: `${70 + Math.random() * 30}%` }}
+                    style={{
+                        width: `${LINE_WIDTHS[i % LINE_WIDTHS.length]}%`,
+                    }}
                 />
             ))}
         </div>

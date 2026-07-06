@@ -1,6 +1,7 @@
+import type { Metadata } from "next";
 import { DashboardShell } from "@/components/layout";
 
-export const metadata = {
+export const metadata: Metadata = {
     title: "Dashboard",
     description: "Your wealth intelligence command center.",
 };

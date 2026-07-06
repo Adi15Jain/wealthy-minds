@@ -1,23 +1,27 @@
-import { NextRequest, NextResponse } from "next/server";
-import { env } from "@/lib/env";
+import { ok, fail, requireUser } from "@/lib/api/respond";
+import { rateLimit } from "@/lib/api/rate-limit";
+import { generateJsonArray, hasAiProvider } from "@/lib/ai-client";
 
 /**
  * GET /api/market/trending
- * Returns currently popular Indian market assets with real performance metrics
- * powered by Gemini AI. No hardcoded data — every response is generated live.
+ * Returns currently popular Indian market assets via the shared Gemini client.
  */
-export async function GET(request: NextRequest) {
-    try {
-        const apiKey = env.GOOGLE_AI_API_KEY;
 
-        if (!apiKey) {
-            return NextResponse.json(
-                { success: false, message: "GOOGLE_AI_API_KEY is not configured." },
-                { status: 500 }
-            );
-        }
+interface TrendingAsset {
+    symbol: string;
+    name: string;
+    type: string;
+    cagr3y: number;
+    cagr1y: number;
+    volatility: string;
+    consistency: number;
+    drawdown: number;
+    sector: string;
+    riskLabel: string;
+    highlight: string;
+}
 
-        const prompt = `You are a professional Indian financial markets data system with access to the latest market data as of today.
+const PROMPT = `You are a professional Indian financial markets data system with access to the latest market data as of today.
 
 Return a JSON array of exactly 6 currently popular and relevant Indian market assets that retail investors are actively researching or investing in. These should be REAL assets with ACCURATE, up-to-date performance data.
 
@@ -45,44 +49,29 @@ For EACH asset, provide ACCURATE real-world data:
 Use the most recently available market data. Be as accurate as possible — investors will use this to make real decisions.
 Return ONLY the raw JSON array. No markdown, no explanation, no code fences.`;
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+export async function GET() {
+    const userId = await requireUser();
+    if (!userId) return fail("UNAUTHORIZED", "Sign in required", 401);
 
-        const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { responseMimeType: "application/json" },
-            }),
+    const limited = rateLimit(`market-trending:${userId}`, {
+        limit: 10,
+        windowMs: 60_000,
+    });
+    if (!limited.allowed) {
+        return fail("RATE_LIMITED", "Too many requests. Please slow down.", 429, {
+            retryAfterSeconds: limited.retryAfterSeconds,
         });
+    }
 
-        if (!response.ok) {
-            const errText = await response.text();
-            console.error("Gemini trending API error:", errText);
-            throw new Error(`Gemini API returned status ${response.status}`);
-        }
+    if (!hasAiProvider()) {
+        return fail("AI_UNAVAILABLE", "Market data service is not configured.", 503);
+    }
 
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!text) {
-            throw new Error("Empty response from Gemini for trending assets");
-        }
-
-        const assets = JSON.parse(text.trim());
-
-        return NextResponse.json({
-            success: true,
-            data: Array.isArray(assets) ? assets : [],
-            source: "gemini",
-            timestamp: new Date().toISOString(),
-        });
-
-    } catch (error: any) {
-        console.error("Trending API Error:", error);
-        return NextResponse.json(
-            { success: false, message: "Failed to fetch trending assets", error: error.message },
-            { status: 500 }
-        );
+    try {
+        const assets = await generateJsonArray<TrendingAsset>(PROMPT);
+        return ok(assets, { cacheSeconds: 3600 });
+    } catch (error) {
+        console.error("Trending API error:", error);
+        return fail("UPSTREAM_ERROR", "Failed to fetch trending assets.", 502);
     }
 }

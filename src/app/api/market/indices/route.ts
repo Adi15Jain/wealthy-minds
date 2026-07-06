@@ -1,24 +1,23 @@
-import { NextRequest, NextResponse } from "next/server";
-import { env } from "@/lib/env";
+import { ok, fail, requireUser } from "@/lib/api/respond";
+import { rateLimit } from "@/lib/api/rate-limit";
+import { generateJsonArray, hasAiProvider } from "@/lib/ai-client";
 
 /**
  * GET /api/market/indices
- * Fetches live Indian market index data.
- * Uses Gemini AI to provide current index values and daily changes.
- * No hardcoded mock data.
+ * Fetches Indian market index data via the shared Gemini client.
  */
-export async function GET(request: NextRequest) {
-    try {
-        const apiKey = env.GOOGLE_AI_API_KEY;
 
-        if (!apiKey) {
-            return NextResponse.json(
-                { success: false, message: "GOOGLE_AI_API_KEY is not configured." },
-                { status: 500 }
-            );
-        }
+interface MarketIndex {
+    name: string;
+    value: number;
+    change: number;
+    changePercent: number;
+    trend: string;
+    weekHigh: number;
+    weekLow: number;
+}
 
-        const prompt = `You are a real-time Indian stock market data system. Return a JSON array of the 4 major Indian market indices with their current approximate values and today's change.
+const PROMPT = `You are a real-time Indian stock market data system. Return a JSON array of the 4 major Indian market indices with their current approximate values and today's change.
 
 Include these indices in this order:
 1. NIFTY 50
@@ -40,44 +39,29 @@ For each index, return:
 Use the most recent available data. Be as accurate as possible with current values.
 Return ONLY the raw JSON array.`;
 
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+export async function GET() {
+    const userId = await requireUser();
+    if (!userId) return fail("UNAUTHORIZED", "Sign in required", 401);
 
-        const response = await fetch(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: prompt }] }],
-                generationConfig: { responseMimeType: "application/json" },
-            }),
+    const limited = rateLimit(`market-indices:${userId}`, {
+        limit: 10,
+        windowMs: 60_000,
+    });
+    if (!limited.allowed) {
+        return fail("RATE_LIMITED", "Too many requests. Please slow down.", 429, {
+            retryAfterSeconds: limited.retryAfterSeconds,
         });
+    }
 
-        if (!response.ok) {
-            const errText = await response.text();
-            console.error("Gemini indices API error:", errText);
-            throw new Error(`Gemini API returned status ${response.status}`);
-        }
+    if (!hasAiProvider()) {
+        return fail("AI_UNAVAILABLE", "Market data service is not configured.", 503);
+    }
 
-        const data = await response.json();
-        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-        if (!text) {
-            throw new Error("Empty response from Gemini for indices");
-        }
-
-        const indices = JSON.parse(text.trim());
-
-        return NextResponse.json({
-            data: Array.isArray(indices) ? indices : [],
-            success: true,
-            source: "gemini",
-            timestamp: new Date().toISOString(),
-        });
-
-    } catch (error: any) {
-        console.error("Indices API Error:", error);
-        return NextResponse.json(
-            { success: false, message: "Failed to fetch market indices", error: error.message },
-            { status: 500 }
-        );
+    try {
+        const indices = await generateJsonArray<MarketIndex>(PROMPT);
+        return ok(indices, { cacheSeconds: 300 });
+    } catch (error) {
+        console.error("Indices API error:", error);
+        return fail("UPSTREAM_ERROR", "Failed to fetch market indices.", 502);
     }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -11,6 +11,19 @@ import {
     Badge,
 } from "@/components/ui";
 import { pageTransition } from "@/lib/motion";
+import { clamp, formatCurrency } from "@/lib/utils";
+import {
+    lognormalBand,
+    normCdf,
+    realRate,
+    sipFutureValue,
+    sipShareOfReturnsInFinalYears,
+} from "@/lib/finance";
+import {
+    useAssetSearch,
+    fetchAssetDetails,
+    type AssetSearchResult,
+} from "@/hooks/use-asset-search";
 import {
     LineChart as LineChartIcon,
     Calculator,
@@ -23,6 +36,7 @@ import {
     Search,
     Loader2,
     X,
+    AlertCircle,
 } from "lucide-react";
 import {
     ResponsiveContainer,
@@ -34,14 +48,6 @@ import {
     Tooltip,
     Legend,
 } from "recharts";
-
-interface SearchResult {
-    id: string;
-    name: string;
-    symbol: string;
-    type: string;
-    sector: string;
-}
 
 function MonteCarloContent() {
     const searchParams = useSearchParams();
@@ -59,60 +65,44 @@ function MonteCarloContent() {
 
     // Asset search state
     const [selectedAssetName, setSelectedAssetName] = useState<string>(urlName || "");
-    const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-    const [searchLoading, setSearchLoading] = useState(false);
     const [detailsLoading, setDetailsLoading] = useState(false);
+    const [detailsError, setDetailsError] = useState("");
     const [isFocused, setIsFocused] = useState(false);
 
-    // Debounced autocomplete search
-    useEffect(() => {
-        if (searchQuery.trim().length < 2) {
-            setSearchResults([]);
-            return;
-        }
-        const delay = setTimeout(async () => {
-            setSearchLoading(true);
-            try {
-                const res = await fetch(`/api/market/search?q=${encodeURIComponent(searchQuery)}`);
-                const data = await res.json();
-                if (data.success && data.content) {
-                    setSearchResults(data.content);
-                }
-            } catch (e) {
-                console.error("Search failed", e);
-            } finally {
-                setSearchLoading(false);
-            }
-        }, 300);
-        return () => clearTimeout(delay);
-    }, [searchQuery]);
+    // Debounced autocomplete search (shared hook)
+    const {
+        query: searchQuery,
+        setQuery: setSearchQuery,
+        results: searchResults,
+        isSearching: searchLoading,
+        clear: clearSearch,
+    } = useAssetSearch();
 
     // Handle selecting an asset from search results
-    const handleSelectAsset = async (item: SearchResult) => {
-        setSearchQuery("");
-        setSearchResults([]);
+    const handleSelectAsset = async (item: AssetSearchResult) => {
+        clearSearch();
         setDetailsLoading(true);
+        setDetailsError("");
         setSelectedAssetName(item.name);
 
         try {
-            const url = `/api/market/details?name=${encodeURIComponent(item.name)}&type=${encodeURIComponent(item.type)}&symbol=${encodeURIComponent(item.symbol)}&id=${encodeURIComponent(item.id)}`;
-            const res = await fetch(url);
-            const data = await res.json();
-            if (data.success && data.data) {
-                if (data.data.cagr3y) setCagr(data.data.cagr3y);
-                if (data.data.volatilityPercent) {
-                    setVolatility(data.data.volatilityPercent);
-                } else if (data.data.volatility === "Low") {
-                    setVolatility(8);
-                } else if (data.data.volatility === "High") {
-                    setVolatility(22);
-                } else {
-                    setVolatility(14);
-                }
+            const details = await fetchAssetDetails(item.name, item.type, item.symbol, item.id);
+            if (details.cagr3y) setCagr(details.cagr3y);
+            if (details.volatilityPercent) {
+                setVolatility(details.volatilityPercent);
+            } else if (details.volatility === "Low") {
+                setVolatility(8);
+            } else if (details.volatility === "High") {
+                setVolatility(22);
+            } else {
+                setVolatility(14);
             }
         } catch (e) {
-            console.error("Failed to fetch asset details", e);
+            setDetailsError(
+                e instanceof Error
+                    ? e.message
+                    : "Failed to fetch asset details. Please try again.",
+            );
         } finally {
             setDetailsLoading(false);
         }
@@ -120,50 +110,40 @@ function MonteCarloContent() {
 
     const clearSelectedAsset = () => {
         setSelectedAssetName("");
+        setDetailsError("");
         setCagr(14);
         setVolatility(16);
     };
 
-    // Calculations
+    // Calculations — all financial math sourced from @/lib/finance
     const effectiveCagr = showInflationAdjusted
-        ? ((1 + cagr / 100) / (1 + inflationRate / 100) - 1) * 100
+        ? realRate(cagr / 100, inflationRate / 100) * 100
         : cagr;
 
     const generateSimulationData = () => {
         const data = [];
         const totalMonths = years * 12;
-        let expectedBalance = 0;
         let accumulatedInvested = 0;
 
-        const monthlyRate = effectiveCagr / 12 / 100;
+        const cagrDecimal = effectiveCagr / 100;
+        const volDecimal = volatility / 100;
 
         for (let month = 1; month <= totalMonths; month++) {
             accumulatedInvested += sipAmount;
-            
-            // Expected Compounding Balance (Annuity due model)
-            expectedBalance = (expectedBalance + sipAmount) * (1 + monthlyRate);
-
-            // Cumulative volatility risk scaling with sqrt(time)
-            const t = month / 12; // Time in years
-            const volFrac = volatility / 100;
-            const cumulativeVol = volFrac * Math.sqrt(t);
-
-            // Z-Scores: 90th percentile = +1.28, 10th percentile = -1.28
-            const optMultiplier = Math.exp(1.28 * cumulativeVol - 0.5 * volFrac * volFrac * t);
-            const conMultiplier = Math.exp(-1.28 * cumulativeVol - 0.5 * volFrac * volFrac * t);
-
-            const optimisticBalance = expectedBalance * optMultiplier;
-            const conservativeBalance = expectedBalance * conMultiplier;
 
             // Sample data points to keep chart performance optimal
             if (month === 1 || month === totalMonths || month % 3 === 0) {
+                // Lognormal band: expected = annuity-due SIP at the effective
+                // monthly rate; opt/con = ±1.28σ√t percentiles (GBM model).
+                const band = lognormalBand(0, sipAmount, cagrDecimal, volDecimal, month / 12);
+
                 data.push({
                     month,
                     year: `Yr ${(month / 12).toFixed(1)}`,
                     "Invested Capital": Math.round(accumulatedInvested),
-                    "Conservative Scenario": Math.round(Math.max(accumulatedInvested * 0.75, conservativeBalance)),
-                    "Expected Target": Math.round(expectedBalance),
-                    "Optimistic Scenario": Math.round(optimisticBalance),
+                    "Conservative Scenario": Math.round(Math.max(accumulatedInvested * 0.75, band.conservative)),
+                    "Expected Target": Math.round(band.expected),
+                    "Optimistic Scenario": Math.round(band.optimistic),
                 });
             }
         }
@@ -179,7 +159,38 @@ function MonteCarloContent() {
     const finalConservative = finalYearData ? finalYearData["Conservative Scenario"] : 0;
 
     const totalGains = finalExpected - finalInvested;
-    const fdOutperformance = effectiveCagr > 7.0 ? Math.min(99, Math.round(75 + (effectiveCagr - 7) * 3 - (volatility - 10) * 0.5)) : Math.round(effectiveCagr * 10);
+
+    // Probability the portfolio beats a 7% FD corpus under the lognormal
+    // model: P = Φ(ln(median / fdCorpus) / (σ√T)).
+    const FD_ANNUAL_RATE = 0.07;
+    const fdRate = showInflationAdjusted
+        ? realRate(FD_ANNUAL_RATE, inflationRate / 100)
+        : FD_ANNUAL_RATE;
+    const fdCorpus = sipFutureValue(sipAmount, fdRate, years * 12);
+    const sigmaSqrtT = (volatility / 100) * Math.sqrt(years);
+    const fdOutperformance =
+        finalExpected > 0 && fdCorpus > 0
+            ? sigmaSqrtT > 0
+                ? Math.round(normCdf(Math.log(finalExpected / fdCorpus) / sigmaSqrtT) * 100)
+                : finalExpected > fdCorpus
+                  ? 100
+                  : 0
+            : 0;
+
+    // Share of total projected gains earned in the final years of the
+    // timeline — computed from the actual chart data (no hardcoded claim).
+    const finalWindowYears = clamp(Math.min(4, years - 1), 1, years);
+    const gainShareInFinalYears = sipShareOfReturnsInFinalYears(
+        simData.map((d) => ({
+            invested: d["Invested Capital"],
+            expected: d["Expected Target"],
+        })),
+        finalWindowYears,
+        years,
+    );
+    const gainSharePercent = Number.isFinite(gainShareInFinalYears)
+        ? Math.round(gainShareInFinalYears * 100)
+        : null;
 
     return (
         <motion.div
@@ -255,6 +266,14 @@ function MonteCarloContent() {
                         </AnimatePresence>
                     </div>
 
+                    {/* Details fetch error */}
+                    {detailsError && (
+                        <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-negative-500/10 border border-negative-500/20 max-w-lg">
+                            <AlertCircle className="h-3.5 w-3.5 text-negative-400 flex-shrink-0" />
+                            <p className="text-xs text-negative-400">{detailsError}</p>
+                        </div>
+                    )}
+
                     {/* Selected asset badge */}
                     {selectedAssetName && (
                         <div className="mt-2 flex items-center gap-2">
@@ -286,6 +305,7 @@ function MonteCarloContent() {
                             max="100000"
                             step="1000"
                             value={sipAmount}
+                            aria-label="Monthly SIP contribution"
                             onChange={(e) => setSipAmount(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -310,6 +330,7 @@ function MonteCarloContent() {
                             max="30"
                             step="1"
                             value={years}
+                            aria-label="Investment duration in years"
                             onChange={(e) => setYears(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -337,6 +358,7 @@ function MonteCarloContent() {
                             max="25"
                             step="0.5"
                             value={cagr}
+                            aria-label="Expected annual return (CAGR) percentage"
                             onChange={(e) => setCagr(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -364,6 +386,7 @@ function MonteCarloContent() {
                             max="30"
                             step="1"
                             value={volatility}
+                            aria-label="Market volatility percentage"
                             onChange={(e) => setVolatility(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -399,7 +422,7 @@ function MonteCarloContent() {
                 <Card padding="md" animate>
                     <p className="metric-label mb-1">Total Invested Principal</p>
                     <p className="text-xl font-bold text-text-primary">
-                        ₹{finalInvested.toLocaleString("en-IN")}
+                        {formatCurrency(finalInvested, { decimals: 0 })}
                     </p>
                     <span className="text-[10px] text-text-tertiary">Raw cumulative savings</span>
                 </Card>
@@ -410,7 +433,7 @@ function MonteCarloContent() {
                         Conservative Scenario (10th%)
                     </p>
                     <p className="text-xl font-bold text-negative-400">
-                        ₹{finalConservative.toLocaleString("en-IN")}
+                        {formatCurrency(finalConservative, { decimals: 0 })}
                     </p>
                     <span className="text-[10px] text-text-tertiary">In highly stagnated markets</span>
                 </Card>
@@ -421,7 +444,7 @@ function MonteCarloContent() {
                         Expected Growth Target (50th%)
                     </p>
                     <p className="text-xl font-bold text-wealth-400">
-                        ₹{finalExpected.toLocaleString("en-IN")}
+                        {formatCurrency(finalExpected, { decimals: 0 })}
                     </p>
                     <span className="text-[10px] text-text-tertiary">Historical CAGR average</span>
                 </Card>
@@ -432,7 +455,7 @@ function MonteCarloContent() {
                         Optimistic Scenario (90th%)
                     </p>
                     <p className="text-xl font-bold text-positive-500">
-                        ₹{finalOptimistic.toLocaleString("en-IN")}
+                        {formatCurrency(finalOptimistic, { decimals: 0 })}
                     </p>
                     <span className="text-[10px] text-text-tertiary">In strong bull markets</span>
                 </Card>
@@ -473,7 +496,7 @@ function MonteCarloContent() {
                                     tick={{ fill: "#94A3B8", fontSize: 10 }}
                                 />
                                 <Tooltip
-                                    formatter={(value: any) => `₹${Number(value).toLocaleString("en-IN")}`}
+                                    formatter={(value: number | string | readonly (number | string)[] | undefined) => formatCurrency(Number(value), { decimals: 0 })}
                                     contentStyle={{
                                         backgroundColor: "rgba(15, 23, 42, 0.95)",
                                         borderColor: "rgba(255,255,255,0.1)",
@@ -535,7 +558,7 @@ function MonteCarloContent() {
                             <div className="flex justify-between border-b border-border-subtle pb-2">
                                 <span className="text-xs text-text-secondary">Total Net Compounded Gains</span>
                                 <span className="text-xs font-bold text-positive-500">
-                                    +₹{totalGains > 0 ? totalGains.toLocaleString("en-IN") : 0}
+                                    +{formatCurrency(totalGains > 0 ? totalGains : 0, { decimals: 0 })}
                                 </span>
                             </div>
                             <div className="flex justify-between border-b border-border-subtle pb-2">
@@ -545,7 +568,7 @@ function MonteCarloContent() {
                                 </span>
                             </div>
                             <div className="flex justify-between border-b border-border-subtle pb-2">
-                                <span className="text-xs text-text-secondary">Outperform FD Probability</span>
+                                <span className="text-xs text-text-secondary">Outperform FD (7%) Probability</span>
                                 <span className="text-xs font-bold text-positive-500">{fdOutperformance}%</span>
                             </div>
                         </div>
@@ -566,7 +589,15 @@ function MonteCarloContent() {
                             Teller Wisdom
                         </h4>
                         <p className="text-[11px] text-text-secondary leading-relaxed">
-                            "Compounding growth is highly back-loaded. Your SIP generates nearly 50% of its total projected returns in the final 4 years of the {years}-year timeline."
+                            {gainSharePercent !== null ? (
+                                <>
+                                    &ldquo;Compounding growth is highly back-loaded. Your SIP generates about {gainSharePercent}% of its total projected returns in the final {finalWindowYears} {finalWindowYears === 1 ? "year" : "years"} of the {years}-year timeline.&rdquo;
+                                </>
+                            ) : (
+                                <>
+                                    &ldquo;Compounding growth is highly back-loaded — most of your projected returns arrive in the final years of the timeline.&rdquo;
+                                </>
+                            )}
                         </p>
                     </Card>
                 </div>

@@ -1,0 +1,27 @@
+{
+    "services": {
+        "frontend": {
+            "root": ".",
+            "framework": "nextjs"
+        },
+        "analytics": {
+            "root": "services/analytics"
+        }
+    },
+    "rewrites": [
+        {
+            "source": "/api/analytics(/.*)?",
+            "destination": {
+                "type": "service",
+                "service": "analytics"
+            }
+        },
+        {
+            "source": "/(.*)",
+            "destination": {
+                "type": "service",
+                "service": "frontend"
+            }
+        }
+    ]
+}

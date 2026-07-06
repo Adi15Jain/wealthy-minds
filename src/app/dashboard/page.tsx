@@ -1,14 +1,14 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useSyncExternalStore } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-    Card,
-    
-    Button,
-    Badge,
-} from "@/components/ui";
+import { Card, Button, Badge } from "@/components/ui";
 import { pageTransition, staggerContainer, staggerItem } from "@/lib/motion";
+import {
+    useAssetSearch,
+    fetchAssetDetails,
+    type AssetSearchResult,
+} from "@/hooks/use-asset-search";
 import {
     Search,
     TrendingUp,
@@ -66,14 +66,6 @@ interface Asset {
     sipSuitability?: string;
 }
 
-interface SearchResult {
-    id: string;
-    name: string;
-    symbol: string;
-    type: "Stock" | "Mutual Fund" | "Bond";
-    sector: string;
-}
-
 interface MarketIndex {
     name: string;
     value: number;
@@ -82,6 +74,28 @@ interface MarketIndex {
     trend: string;
     weekHigh?: number;
     weekLow?: number;
+}
+
+// Hydration-safe "has the client mounted" flag: false during SSR/hydration,
+// true immediately after — without setting state inside an effect.
+const emptySubscribe = () => () => {};
+function useHydrated(): boolean {
+    return useSyncExternalStore(
+        emptySubscribe,
+        () => true,
+        () => false,
+    );
+}
+
+// Lazily read the persisted watchlist (client only, SSR-safe).
+function readStoredWatchlist(): Asset[] {
+    if (typeof window === "undefined") return [];
+    try {
+        const saved = window.localStorage.getItem("wealthyminds_watchlist_v2");
+        return saved ? (JSON.parse(saved) as Asset[]) : [];
+    } catch {
+        return [];
+    }
 }
 
 const SUGGESTED_ASKS = [
@@ -103,10 +117,14 @@ export default function DashboardPage() {
     const [indices, setIndices] = useState<MarketIndex[]>([]);
     const [indicesLoading, setIndicesLoading] = useState(true);
 
-    // ── Live Search Autocomplete ─────────────────────────────────────────
-    const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-    const [searchLoading, setSearchLoading] = useState(false);
+    // ── Live Search Autocomplete (shared hook) ──────────────────────────
+    const {
+        query: searchQuery,
+        setQuery: setSearchQuery,
+        results: searchResults,
+        isSearching: searchLoading,
+        clear: clearSearch,
+    } = useAssetSearch();
     const [isFocused, setIsFocused] = useState(false);
     const searchRef = useRef<HTMLDivElement>(null);
 
@@ -114,35 +132,43 @@ export default function DashboardPage() {
     const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
     const [detailsLoading, setDetailsLoading] = useState(false);
 
-    // ── Watchlist ────────────────────────────────────────────────────────
-    const [watchlist, setWatchlist] = useState<Asset[]>([]);
+    // ── Watchlist (lazily initialized from localStorage, SSR-safe) ──────
+    const [watchlist, setWatchlist] = useState<Asset[]>(readStoredWatchlist);
+    // Watchlist content renders only after hydration to avoid a mismatch
+    // between the (empty) server HTML and the persisted client state.
+    const hydrated = useHydrated();
 
     // ═══════════════════════════════════════════════════════════════════════
     // EFFECTS — Dynamic Data Loading
     // ═══════════════════════════════════════════════════════════════════════
 
-    // Load trending assets on mount
-    useEffect(() => {
-        const fetchTrending = async () => {
-            setFeaturedLoading(true);
-            setFeaturedError("");
-            try {
-                const res = await fetch("/api/market/trending");
-                const data = await res.json();
-                if (data.success && data.data) {
-                    setFeaturedAssets(data.data);
-                } else {
-                    setFeaturedError("Failed to load trending assets.");
-                }
-            } catch (e) {
-                console.error("Failed to fetch trending assets", e);
-                setFeaturedError("Network error loading trending assets.");
-            } finally {
-                setFeaturedLoading(false);
+    // Load trending assets on mount (also re-run by the Retry button)
+    const fetchTrending = useCallback(async () => {
+        setFeaturedLoading(true);
+        setFeaturedError("");
+        try {
+            const res = await fetch("/api/market/trending");
+            const data = await res.json();
+            if (data.success && data.data) {
+                setFeaturedAssets(data.data);
+            } else {
+                setFeaturedError("Failed to load trending assets.");
             }
-        };
-        fetchTrending();
+        } catch (e) {
+            console.error("Failed to fetch trending assets", e);
+            setFeaturedError("Network error loading trending assets.");
+        } finally {
+            setFeaturedLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        // Deferred so no state update happens synchronously in the effect body.
+        const timer = setTimeout(() => {
+            void fetchTrending();
+        }, 0);
+        return () => clearTimeout(timer);
+    }, [fetchTrending]);
 
     // Load market indices on mount
     useEffect(() => {
@@ -163,43 +189,6 @@ export default function DashboardPage() {
         fetchIndices();
     }, []);
 
-    // Load watchlist from localStorage
-    useEffect(() => {
-        try {
-            const saved = localStorage.getItem("wealthyminds_watchlist_v2");
-            if (saved) {
-                setWatchlist(JSON.parse(saved));
-            }
-        } catch (e) {
-            console.error("Failed to load watchlist", e);
-        }
-    }, []);
-
-    // Debounced autocomplete search
-    useEffect(() => {
-        if (searchQuery.trim().length < 2) {
-            setSearchResults([]);
-            return;
-        }
-
-        const delayDebounce = setTimeout(async () => {
-            setSearchLoading(true);
-            try {
-                const res = await fetch(`/api/market/search?q=${encodeURIComponent(searchQuery)}`);
-                const data = await res.json();
-                if (data.success && data.content) {
-                    setSearchResults(data.content);
-                }
-            } catch (e) {
-                console.error("Search failed", e);
-            } finally {
-                setSearchLoading(false);
-            }
-        }, 300);
-
-        return () => clearTimeout(delayDebounce);
-    }, [searchQuery]);
-
     // ═══════════════════════════════════════════════════════════════════════
     // HANDLERS
     // ═══════════════════════════════════════════════════════════════════════
@@ -210,21 +199,13 @@ export default function DashboardPage() {
         router.push(`/dashboard/ai-insights?ask=${encodeURIComponent(searchQuery)}`);
     };
 
-    const handleSelectSearchResult = async (item: SearchResult) => {
-        setSearchQuery("");
-        setSearchResults([]);
+    const handleSelectSearchResult = async (item: AssetSearchResult) => {
+        clearSearch();
         setDetailsLoading(true);
 
         try {
-            const detailsUrl = `/api/market/details?name=${encodeURIComponent(item.name)}&type=${encodeURIComponent(item.type)}&symbol=${encodeURIComponent(item.symbol)}&id=${encodeURIComponent(item.id)}`;
-            const res = await fetch(detailsUrl);
-            const data = await res.json();
-
-            if (data.success && data.data) {
-                setSelectedAsset(data.data);
-            } else {
-                console.error("Failed to fetch details:", data.message);
-            }
+            const details = await fetchAssetDetails(item.name, item.type, item.symbol, item.id);
+            setSelectedAsset(details);
         } catch (e) {
             console.error("Failed to fetch asset details", e);
         } finally {
@@ -242,15 +223,9 @@ export default function DashboardPage() {
         // Otherwise fetch full details
         setDetailsLoading(true);
         try {
-            const detailsUrl = `/api/market/details?name=${encodeURIComponent(asset.name)}&type=${encodeURIComponent(asset.type)}&symbol=${encodeURIComponent(asset.symbol)}&id=`;
-            const res = await fetch(detailsUrl);
-            const data = await res.json();
-            if (data.success && data.data) {
-                setSelectedAsset(data.data);
-            } else {
-                setSelectedAsset(asset);
-            }
-        } catch (e) {
+            const details = await fetchAssetDetails(asset.name, asset.type, asset.symbol);
+            setSelectedAsset(details);
+        } catch {
             setSelectedAsset(asset);
         } finally {
             setDetailsLoading(false);
@@ -449,12 +424,12 @@ export default function DashboardPage() {
                             Saved Watchlist
                         </h3>
                         <Badge variant="outline" className="text-xs">
-                            {watchlist.length} Assets
+                            {hydrated ? watchlist.length : 0} Assets
                         </Badge>
                     </div>
 
                     <Card padding="md" className="space-y-2 max-h-[480px] overflow-y-auto">
-                        {watchlist.length === 0 ? (
+                        {!hydrated || watchlist.length === 0 ? (
                             <div className="text-center py-12 text-text-tertiary space-y-2">
                                 <Star className="h-8 w-8 mx-auto stroke-1" />
                                 <p className="text-sm">Your watchlist is empty.</p>
@@ -464,32 +439,38 @@ export default function DashboardPage() {
                             watchlist.map((asset) => (
                                 <div
                                     key={asset.symbol}
-                                    onClick={() => setSelectedAsset(asset)}
-                                    className="p-3.5 rounded-lg border border-border-subtle bg-surface-50 hover:bg-surface-100 hover:border-border-default transition-all duration-200 cursor-pointer flex items-center justify-between group"
+                                    className="p-3.5 rounded-lg border border-border-subtle bg-surface-50 hover:bg-surface-100 hover:border-border-default transition-all duration-200 flex items-center justify-between gap-3 group"
                                 >
-                                    <div className="min-w-0">
-                                        <div className="flex items-center gap-1.5">
-                                            <span className="text-xs font-bold text-text-primary truncate">{asset.symbol}</span>
-                                            <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-surface-200 text-text-tertiary">
-                                                {asset.type}
-                                            </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedAsset(asset)}
+                                        aria-label={`View details for ${asset.name}`}
+                                        className="flex-1 min-w-0 flex items-center justify-between gap-3 text-left cursor-pointer"
+                                    >
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-1.5">
+                                                <span className="text-xs font-bold text-text-primary truncate">{asset.symbol}</span>
+                                                <span className="text-[10px] uppercase font-bold tracking-wider px-1.5 py-0.5 rounded bg-surface-200 text-text-tertiary">
+                                                    {asset.type}
+                                                </span>
+                                            </div>
+                                            <p className="text-xs text-text-secondary truncate mt-0.5">{asset.name}</p>
                                         </div>
-                                        <p className="text-xs text-text-secondary truncate mt-0.5">{asset.name}</p>
-                                    </div>
-                                    <div className="text-right flex items-center gap-3 flex-shrink-0">
-                                        <div>
+                                        <div className="text-right flex-shrink-0">
                                             <p className="text-sm font-bold text-positive-500 flex items-center justify-end">
                                                 +{asset.cagr3y}%
                                             </p>
                                             <p className="text-[10px] text-text-tertiary">3Y CAGR</p>
                                         </div>
-                                        <button
-                                            onClick={(e) => toggleWatchlist(asset, e)}
-                                            className="text-accent-400 hover:text-text-tertiary transition-colors"
-                                        >
-                                            <Star className="h-4 w-4 fill-accent-400" />
-                                        </button>
-                                    </div>
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={(e) => toggleWatchlist(asset, e)}
+                                        aria-label={`Remove ${asset.name} from watchlist`}
+                                        className="text-accent-400 hover:text-text-tertiary transition-colors flex-shrink-0"
+                                    >
+                                        <Star className="h-4 w-4 fill-accent-400" />
+                                    </button>
                                 </div>
                             ))
                         )}
@@ -552,7 +533,7 @@ export default function DashboardPage() {
                         <Card padding="lg" className="text-center space-y-3">
                             <AlertCircle className="h-10 w-10 mx-auto text-negative-400" />
                             <p className="text-sm text-text-secondary">{featuredError}</p>
-                            <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+                            <Button size="sm" variant="outline" onClick={() => fetchTrending()}>
                                 Retry
                             </Button>
                         </Card>
@@ -701,6 +682,7 @@ export default function DashboardPage() {
                                 </div>
                                 <button
                                     onClick={() => setSelectedAsset(null)}
+                                    aria-label="Close"
                                     className="text-text-tertiary hover:text-text-primary text-2xl font-light p-1"
                                 >
                                     &times;

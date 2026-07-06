@@ -1,13 +1,121 @@
 "use client";
 
+import { useState, type FormEvent } from "react";
 import { motion } from "framer-motion";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { signIn } from "next-auth/react";
 import { ROUTES } from "@/lib/constants";
 import { Button, Card } from "@/components/ui";
 import { staggerContainer, staggerItem } from "@/lib/motion";
-import { ArrowRight, Mail, User } from "lucide-react";
+import { PASSWORD_RULE, validatePassword } from "@/lib/password";
+import { AlertCircle, ArrowRight, CheckCircle2, Mail, User } from "lucide-react";
+
+interface FieldErrors {
+    name?: string;
+    email?: string;
+    password?: string;
+    confirmPassword?: string;
+}
+
+interface RegisterResponse {
+    success: boolean;
+    message?: string;
+    error?: { code: string; message: string };
+}
+
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function RegisterPage() {
+    const router = useRouter();
+
+    const [name, setName] = useState("");
+    const [email, setEmail] = useState("");
+    const [password, setPassword] = useState("");
+    const [confirmPassword, setConfirmPassword] = useState("");
+    const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+    const [formError, setFormError] = useState<string | null>(null);
+    const [successMessage, setSuccessMessage] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
+
+    const validate = (): boolean => {
+        const errors: FieldErrors = {};
+        const trimmedName = name.trim();
+
+        if (trimmedName.length < 2 || trimmedName.length > 60) {
+            errors.name = "Name must be between 2 and 60 characters.";
+        }
+        if (!EMAIL_REGEX.test(email.trim())) {
+            errors.email = "Please enter a valid email address.";
+        }
+        const passwordCheck = validatePassword(password);
+        if (!passwordCheck.valid) {
+            errors.password = passwordCheck.message;
+        }
+        if (confirmPassword !== password) {
+            errors.confirmPassword = "Passwords do not match.";
+        }
+
+        setFieldErrors(errors);
+        return Object.keys(errors).length === 0;
+    };
+
+    const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
+        e.preventDefault();
+        if (isLoading) return;
+        setFormError(null);
+        setSuccessMessage(null);
+
+        if (!validate()) return;
+
+        setIsLoading(true);
+        try {
+            const response = await fetch("/api/auth/register", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    name: name.trim(),
+                    email: email.trim().toLowerCase(),
+                    password,
+                }),
+            });
+            const data = (await response.json()) as RegisterResponse;
+
+            if (!data.success) {
+                setFormError(
+                    data.error?.message ??
+                        "Registration failed. Please try again.",
+                );
+                setIsLoading(false);
+                return;
+            }
+
+            setSuccessMessage(
+                data.message ?? "Account created! Signing you in…",
+            );
+
+            const signInResult = await signIn("credentials", {
+                email: email.trim().toLowerCase(),
+                password,
+                redirect: false,
+            });
+
+            if (signInResult?.error) {
+                // Account was created but auto sign-in failed — send to login.
+                router.push(ROUTES.AUTH.LOGIN);
+                return;
+            }
+
+            router.push(ROUTES.ONBOARDING);
+        } catch {
+            setFormError("Something went wrong. Please try again.");
+            setIsLoading(false);
+        }
+    };
+
+    const inputBaseClass =
+        "flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary outline-none";
+
     return (
         <div className="min-h-screen flex items-center justify-center bg-surface-0 relative overflow-hidden">
             <div
@@ -53,6 +161,11 @@ export default function RegisterPage() {
                             variant="outline"
                             className="w-full mb-4"
                             size="lg"
+                            onClick={() =>
+                                signIn("google", {
+                                    callbackUrl: ROUTES.ONBOARDING,
+                                })
+                            }
                         >
                             <svg className="h-5 w-5 mr-2" viewBox="0 0 24 24">
                                 <path
@@ -86,49 +199,150 @@ export default function RegisterPage() {
                             </div>
                         </div>
 
-                        <div className="space-y-4">
+                        <form
+                            onSubmit={handleSubmit}
+                            className="space-y-4"
+                            noValidate
+                        >
+                            {formError && (
+                                <div
+                                    role="alert"
+                                    className="flex items-start gap-2.5 p-3 rounded-lg bg-negative-500/10 border border-negative-500/30"
+                                >
+                                    <AlertCircle className="h-4 w-4 text-negative-400 flex-shrink-0 mt-0.5" />
+                                    <p className="text-sm text-negative-400">
+                                        {formError}
+                                    </p>
+                                </div>
+                            )}
+                            {successMessage && (
+                                <div
+                                    role="status"
+                                    className="flex items-start gap-2.5 p-3 rounded-lg bg-positive-500/10 border border-positive-500/30"
+                                >
+                                    <CheckCircle2 className="h-4 w-4 text-positive-500 flex-shrink-0 mt-0.5" />
+                                    <p className="text-sm text-positive-500">
+                                        {successMessage}
+                                    </p>
+                                </div>
+                            )}
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                <label
+                                    htmlFor="register-name"
+                                    className="block text-sm font-medium text-text-secondary mb-1.5"
+                                >
                                     Full Name
                                 </label>
                                 <div className="flex items-center h-11 px-4 rounded-lg bg-surface-200 border border-border-subtle focus-within:border-wealth-500/50 transition-colors">
                                     <User className="h-4 w-4 text-text-tertiary mr-3" />
                                     <input
+                                        id="register-name"
                                         type="text"
-                                        placeholder="Adi Jain"
-                                        className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary outline-none"
+                                        autoComplete="name"
+                                        placeholder="Your name"
+                                        value={name}
+                                        onChange={(e) =>
+                                            setName(e.target.value)
+                                        }
+                                        className={inputBaseClass}
                                     />
                                 </div>
+                                {fieldErrors.name && (
+                                    <p className="text-xs text-negative-400 mt-1.5">
+                                        {fieldErrors.name}
+                                    </p>
+                                )}
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                <label
+                                    htmlFor="register-email"
+                                    className="block text-sm font-medium text-text-secondary mb-1.5"
+                                >
                                     Email
                                 </label>
                                 <div className="flex items-center h-11 px-4 rounded-lg bg-surface-200 border border-border-subtle focus-within:border-wealth-500/50 transition-colors">
                                     <Mail className="h-4 w-4 text-text-tertiary mr-3" />
                                     <input
+                                        id="register-email"
                                         type="email"
+                                        autoComplete="email"
                                         placeholder="you@example.com"
-                                        className="flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-tertiary outline-none"
+                                        value={email}
+                                        onChange={(e) =>
+                                            setEmail(e.target.value)
+                                        }
+                                        className={inputBaseClass}
                                     />
                                 </div>
+                                {fieldErrors.email && (
+                                    <p className="text-xs text-negative-400 mt-1.5">
+                                        {fieldErrors.email}
+                                    </p>
+                                )}
                             </div>
                             <div>
-                                <label className="block text-sm font-medium text-text-secondary mb-1.5">
+                                <label
+                                    htmlFor="register-password"
+                                    className="block text-sm font-medium text-text-secondary mb-1.5"
+                                >
                                     Password
                                 </label>
                                 <input
+                                    id="register-password"
                                     type="password"
+                                    autoComplete="new-password"
                                     placeholder="Min. 8 characters"
+                                    value={password}
+                                    onChange={(e) =>
+                                        setPassword(e.target.value)
+                                    }
                                     className="w-full h-11 px-4 rounded-lg bg-surface-200 border border-border-subtle focus:border-wealth-500/50 transition-colors text-sm text-text-primary placeholder:text-text-tertiary outline-none"
                                 />
+                                {fieldErrors.password ? (
+                                    <p className="text-xs text-negative-400 mt-1.5">
+                                        {fieldErrors.password}
+                                    </p>
+                                ) : (
+                                    <p className="text-xs text-text-tertiary mt-1.5">
+                                        {PASSWORD_RULE}
+                                    </p>
+                                )}
+                            </div>
+                            <div>
+                                <label
+                                    htmlFor="register-confirm-password"
+                                    className="block text-sm font-medium text-text-secondary mb-1.5"
+                                >
+                                    Confirm Password
+                                </label>
+                                <input
+                                    id="register-confirm-password"
+                                    type="password"
+                                    autoComplete="new-password"
+                                    placeholder="Re-enter your password"
+                                    value={confirmPassword}
+                                    onChange={(e) =>
+                                        setConfirmPassword(e.target.value)
+                                    }
+                                    className="w-full h-11 px-4 rounded-lg bg-surface-200 border border-border-subtle focus:border-wealth-500/50 transition-colors text-sm text-text-primary placeholder:text-text-tertiary outline-none"
+                                />
+                                {fieldErrors.confirmPassword && (
+                                    <p className="text-xs text-negative-400 mt-1.5">
+                                        {fieldErrors.confirmPassword}
+                                    </p>
+                                )}
                             </div>
 
-                            <Button className="w-full" size="lg">
+                            <Button
+                                type="submit"
+                                className="w-full"
+                                size="lg"
+                                isLoading={isLoading}
+                            >
                                 Create Account
                                 <ArrowRight className="h-4 w-4" />
                             </Button>
-                        </div>
+                        </form>
 
                         <p className="text-center text-sm text-text-secondary mt-6">
                             Already have an account?{" "}

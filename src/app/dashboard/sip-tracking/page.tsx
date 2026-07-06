@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -11,9 +11,15 @@ import {
     Button,
     Badge,
 } from "@/components/ui";
-import { pageTransition, staggerContainer, staggerItem } from "@/lib/motion";
+import { pageTransition } from "@/lib/motion";
+import { clamp, formatCurrency } from "@/lib/utils";
+import { effectiveMonthlyRate } from "@/lib/finance";
 import {
-    TrendingUp,
+    useAssetSearch,
+    fetchAssetDetails,
+    type AssetSearchResult,
+} from "@/hooks/use-asset-search";
+import {
     Plus,
     X,
     Sparkles,
@@ -27,6 +33,7 @@ import {
     Check,
     Search,
     Loader2,
+    AlertCircle,
 } from "lucide-react";
 import {
     ResponsiveContainer,
@@ -64,6 +71,32 @@ interface Asset {
     debtToEquity?: number;
 }
 
+// Structured response of POST /api/market/analyze
+interface AnalyzeRanking {
+    rank: number;
+    name: string;
+    score: number;
+    rationale: string;
+}
+
+interface AnalyzeResponseData {
+    verdict?: string;
+    ranking?: AnalyzeRanking[];
+    deepAnalysis?: {
+        riskRewardMatrix?: string;
+        compoundingAdvantage?: string;
+        marketCycleResilience?: string;
+        sipOptimalStrategy?: string;
+    };
+    projections?: {
+        bestCase?: string;
+        worstCase?: string;
+        recommendation?: string;
+    };
+    keyInsights?: string[];
+    warnings?: string[];
+}
+
 // NO PRESET_ASSETS — everything is loaded dynamically
 
 function ComparativeSIPAnalyzerContent() {
@@ -76,11 +109,16 @@ function ComparativeSIPAnalyzerContent() {
     const [years, setYears] = useState<number>(10);
     const [stepUp, setStepUp] = useState<number>(10); // Yearly step-up %
 
-    // Real-time Groww API Search Autocomplete States
-    const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<any[]>([]);
-    const [searchLoading, setSearchLoading] = useState(false);
+    // Real-time Groww API Search Autocomplete (shared hook)
+    const {
+        query: searchQuery,
+        setQuery: setSearchQuery,
+        results: searchResults,
+        isSearching: searchLoading,
+        clear: clearSearch,
+    } = useAssetSearch();
     const [detailsLoading, setDetailsLoading] = useState(false);
+    const [detailsError, setDetailsError] = useState("");
     const [isFocused, setIsFocused] = useState(false);
 
     // Custom asset form state
@@ -101,6 +139,7 @@ function ComparativeSIPAnalyzerContent() {
 
     // AI recommendation state
     const [aiRecommendation, setAiRecommendation] = useState<string>("");
+    const [aiError, setAiError] = useState<string>("");
     const [loadingAi, setLoadingAi] = useState<boolean>(false);
     const [copied, setCopied] = useState<boolean>(false);
     const [loadingMessage, setLoadingMessage] = useState<string>("");
@@ -113,7 +152,7 @@ function ComparativeSIPAnalyzerContent() {
                 const res = await fetch("/api/market/trending");
                 const data = await res.json();
                 if (data.success && data.data && Array.isArray(data.data)) {
-                    const trendingAssets: Asset[] = data.data.map((a: any) => ({
+                    const trendingAssets: Asset[] = (data.data as Asset[]).map((a) => ({
                         symbol: a.symbol,
                         name: a.name,
                         type: a.type,
@@ -142,97 +181,68 @@ function ComparativeSIPAnalyzerContent() {
         loadInitialAssets();
     }, []);
 
-    // Debounce search input and hit real Groww API gateway
-    useEffect(() => {
-        if (searchQuery.trim().length < 2) {
-            setSearchResults([]);
-            return;
-        }
-
-        const delayDebounce = setTimeout(async () => {
-            setSearchLoading(true);
-            try {
-                const res = await fetch(`/api/market/search?q=${encodeURIComponent(searchQuery)}`);
-                const data = await res.json();
-                if (data.success && data.content) {
-                    setSearchResults(data.content);
-                }
-            } catch (e) {
-                console.error("Failed to query Groww API", e);
-            } finally {
-                setSearchLoading(false);
-            }
-        }, 350);
-
-        return () => clearTimeout(delayDebounce);
-    }, [searchQuery]);
-
     // Handle selecting an autocomplete search result from Groww
-    const handleSelectRealAsset = async (item: any) => {
-        setSearchQuery("");
-        setSearchResults([]);
+    const handleSelectRealAsset = async (item: AssetSearchResult) => {
+        clearSearch();
         setDetailsLoading(true);
+        setDetailsError("");
 
         try {
-            const detailsUrl = `/api/market/details?name=${encodeURIComponent(item.name)}&type=${encodeURIComponent(item.type)}&symbol=${encodeURIComponent(item.symbol)}&id=${encodeURIComponent(item.id)}`;
-            const res = await fetch(detailsUrl);
-            const data = await res.json();
+            const newAsset: Asset = await fetchAssetDetails(item.name, item.type, item.symbol, item.id);
 
-            if (data.success && data.data) {
-                const newAsset: Asset = data.data;
+            // Check if symbol is already in list, if not add it
+            setAssetsList((prev) => {
+                if (prev.some((a) => a.symbol === newAsset.symbol)) {
+                    return prev;
+                }
+                return [...prev, newAsset];
+            });
 
-                // Check if symbol is already in list, if not add it
-                setAssetsList((prev) => {
-                    if (prev.some((a) => a.symbol === newAsset.symbol)) {
-                        return prev;
-                    }
-                    return [...prev, newAsset];
-                });
-
-                // Auto-select the newly added real asset
-                setSelectedSymbols((prev) => {
-                    if (prev.includes(newAsset.symbol)) {
-                        return prev;
-                    }
-                    if (prev.length < 3) {
-                        return [...prev, newAsset.symbol];
-                    }
-                    return [prev[0], prev[1], newAsset.symbol];
-                });
-            }
+            // Auto-select the newly added real asset
+            setSelectedSymbols((prev) => {
+                if (prev.includes(newAsset.symbol)) {
+                    return prev;
+                }
+                if (prev.length < 3) {
+                    return [...prev, newAsset.symbol];
+                }
+                return [prev[0], prev[1], newAsset.symbol];
+            });
         } catch (e) {
-            console.error("Failed to fetch asset performance details", e);
+            setDetailsError(
+                e instanceof Error
+                    ? e.message
+                    : "Failed to fetch asset performance details. Please try again.",
+            );
         } finally {
             setDetailsLoading(false);
         }
     };
 
-    // Read URL search params for cross-page asset pre-selection
+    // Read URL search params for cross-page asset pre-selection.
+    // Runs asynchronously (setTimeout) so state updates never happen
+    // synchronously inside the effect body.
     useEffect(() => {
         if (!compareQuery) return;
-        // Check if the symbol is already in our list
-        const existsInList = assetsList.some((a) => a.symbol === compareQuery);
-        if (existsInList) {
-            if (!selectedSymbols.includes(compareQuery)) {
-                if (selectedSymbols.length >= 3) {
-                    setSelectedSymbols([selectedSymbols[0], selectedSymbols[1], compareQuery]);
-                } else {
-                    setSelectedSymbols([...selectedSymbols, compareQuery]);
-                }
-            }
-        } else {
-            // Asset not in list yet — fetch it dynamically using URL params
-            const urlParams = new URLSearchParams(window.location.search);
-            const assetName = urlParams.get("name");
-            const assetType = urlParams.get("type") || "Stock";
-            if (assetName) {
-                const fetchAndAdd = async () => {
-                    try {
-                        const detailsUrl = `/api/market/details?name=${encodeURIComponent(assetName)}&type=${encodeURIComponent(assetType)}&symbol=${encodeURIComponent(compareQuery)}&id=`;
-                        const res = await fetch(detailsUrl);
-                        const data = await res.json();
-                        if (data.success && data.data) {
-                            const newAsset: Asset = data.data;
+
+        const timer = setTimeout(() => {
+            // Check if the symbol is already in our list
+            const existsInList = assetsList.some((a) => a.symbol === compareQuery);
+            if (existsInList) {
+                setSelectedSymbols((prev) => {
+                    if (prev.includes(compareQuery)) return prev;
+                    if (prev.length >= 3) return [prev[0], prev[1], compareQuery];
+                    return [...prev, compareQuery];
+                });
+            } else {
+                // Asset not in list yet — fetch it dynamically using URL params
+                const urlParams = new URLSearchParams(window.location.search);
+                const assetName = urlParams.get("name");
+                const assetType = urlParams.get("type") || "Stock";
+                if (assetName) {
+                    const fetchAndAdd = async () => {
+                        try {
+                            const newAsset: Asset = await fetchAssetDetails(assetName, assetType, compareQuery);
                             setAssetsList((prev) => {
                                 if (prev.some((a) => a.symbol === newAsset.symbol)) return prev;
                                 return [...prev, newAsset];
@@ -242,14 +252,16 @@ function ComparativeSIPAnalyzerContent() {
                                 if (prev.length < 3) return [...prev, newAsset.symbol];
                                 return [prev[0], prev[1], newAsset.symbol];
                             });
+                        } catch (e) {
+                            console.error("Failed to load asset from URL params", e);
                         }
-                    } catch (e) {
-                        console.error("Failed to load asset from URL params", e);
-                    }
-                };
-                fetchAndAdd();
+                    };
+                    fetchAndAdd();
+                }
             }
-        }
+        }, 0);
+
+        return () => clearTimeout(timer);
     }, [compareQuery, assetsList]);
 
     // Handle adding custom asset to the list and selecting it
@@ -297,91 +309,91 @@ function ComparativeSIPAnalyzerContent() {
     };
 
     // Compounding SIP Calculations
-    const selectedAssets = assetsList.filter((a) => selectedSymbols.includes(a.symbol));
+    const selectedAssets = useMemo(
+        () => assetsList.filter((a) => selectedSymbols.includes(a.symbol)),
+        [assetsList, selectedSymbols],
+    );
 
-    const generateChartData = () => {
-        const data = [];
+    // Single memoized projection: the monthly compounding loop is computed
+    // ONCE and feeds both the chart and the per-asset summary metrics.
+    // Uses effective monthly rates + annuity-due convention (@/lib/finance).
+    const projection = useMemo(() => {
         const totalMonths = years * 12;
-
-        // Track variables for each selected asset
         const balances = selectedAssets.map(() => 0);
-        const currentMonthlySips = selectedAssets.map(() => sipAmount);
-        let accumulatedInvestedCapital = 0;
-        let currentInvestedMonthly = sipAmount;
+        const monthlyRates = selectedAssets.map((a) => effectiveMonthlyRate(a.cagr3y / 100));
+        let currentSip = sipAmount;
+        let accumulatedInvested = 0;
+        const chartData: Record<string, number | string>[] = [];
 
         for (let month = 1; month <= totalMonths; month++) {
-            const yearIndex = Math.floor((month - 1) / 12);
-            
             // Yearly Step-Up logic
             if (month > 1 && (month - 1) % 12 === 0) {
-                for (let i = 0; i < selectedAssets.length; i++) {
-                    currentMonthlySips[i] = currentMonthlySips[i] * (1 + stepUp / 100);
-                }
-                currentInvestedMonthly = currentInvestedMonthly * (1 + stepUp / 100);
+                currentSip = currentSip * (1 + stepUp / 100);
             }
 
-            accumulatedInvestedCapital += currentInvestedMonthly;
-
-            const record: any = {
-                month: month,
-                year: `Yr ${(month / 12).toFixed(1)}`,
-                "Capital Invested": Math.round(accumulatedInvestedCapital),
-            };
+            accumulatedInvested += currentSip;
 
             for (let i = 0; i < selectedAssets.length; i++) {
-                const asset = selectedAssets[i];
-                const monthlyRate = asset.cagr3y / 12 / 100;
-                
                 // Compounding math: add monthly investment then apply growth rate
-                balances[i] = (balances[i] + currentMonthlySips[i]) * (1 + monthlyRate);
-                record[asset.symbol] = Math.round(balances[i]);
+                balances[i] = (balances[i] + currentSip) * (1 + monthlyRates[i]);
             }
 
             // Sample data points to keep chart lightweight (every 3 months, plus first & last)
             if (month === 1 || month === totalMonths || month % 3 === 0) {
-                data.push(record);
+                const record: Record<string, number | string> = {
+                    month,
+                    year: `Yr ${(month / 12).toFixed(1)}`,
+                    "Capital Invested": Math.round(accumulatedInvested),
+                };
+                selectedAssets.forEach((asset, i) => {
+                    record[asset.symbol] = Math.round(balances[i]);
+                });
+                chartData.push(record);
             }
         }
-        return data;
-    };
 
-    const chartData = generateChartData();
+        // Final summary metrics for each selected asset
+        const summaries = new Map<
+            string,
+            { invested: number; futureValue: number; growth: number; multiplier: string; efficiencyScore: number }
+        >();
+        selectedAssets.forEach((asset, i) => {
+            const futureValue = balances[i];
+            const growth = futureValue - accumulatedInvested;
+            const multiplier = accumulatedInvested > 0 ? futureValue / accumulatedInvested : 0;
 
-    // Calculate final summary metrics for each selected asset
-    const getAssetSummaryMetrics = (asset: Asset) => {
-        const totalMonths = years * 12;
-        let balance = 0;
-        let accumulatedInvested = 0;
-        let currentSip = sipAmount;
+            // Teller Efficiency Score — documented risk-adjusted return score:
+            // excess return over the 6.5% FD rate per unit of annual volatility
+            // (a pseudo-Sharpe ratio), normalized so that a ratio of 1.5 maps
+            // to 100 and 0 (or worse) maps to 0.
+            const volatilityValue =
+                asset.volatilityPercent ??
+                (asset.volatility === "High" ? 22 : asset.volatility === "Medium" ? 14 : 8);
+            const pseudoSharpe = (asset.cagr3y - 6.5) / Math.max(volatilityValue, 1);
+            const efficiencyScore = Math.round(clamp((pseudoSharpe / 1.5) * 100, 0, 100));
 
-        for (let month = 1; month <= totalMonths; month++) {
-            if (month > 1 && (month - 1) % 12 === 0) {
-                currentSip = currentSip * (1 + stepUp / 100);
-            }
-            accumulatedInvested += currentSip;
-            const monthlyRate = asset.cagr3y / 12 / 100;
-            balance = (balance + currentSip) * (1 + monthlyRate);
-        }
+            summaries.set(asset.symbol, {
+                invested: Math.round(accumulatedInvested),
+                futureValue: Math.round(futureValue),
+                growth: Math.round(growth),
+                multiplier: multiplier.toFixed(2),
+                efficiencyScore,
+            });
+        });
 
-        const growth = balance - accumulatedInvested;
-        const multiplier = balance / accumulatedInvested;
+        return { chartData, summaries };
+    }, [selectedAssets, sipAmount, years, stepUp]);
 
-        // Custom Teller Efficiency Score: Risk-adjusted score out of 100
-        const volPenalty = asset.volatility === "High" ? 15 : asset.volatility === "Medium" ? 7 : 2;
-        const ddPenalty = Math.abs(asset.drawdown) * 0.8;
-        const returnWeight = asset.cagr3y * 2.2;
-        const consistencyBonus = asset.consistency * 0.35;
-        const rawScore = returnWeight + consistencyBonus - volPenalty - ddPenalty;
-        const efficiencyScore = Math.max(30, Math.min(99, Math.round(rawScore)));
+    const chartData = projection.chartData;
 
-        return {
-            invested: Math.round(accumulatedInvested),
-            futureValue: Math.round(balance),
-            growth: Math.round(growth),
-            multiplier: multiplier.toFixed(2),
-            efficiencyScore,
+    const getAssetSummaryMetrics = (asset: Asset) =>
+        projection.summaries.get(asset.symbol) ?? {
+            invested: 0,
+            futureValue: 0,
+            growth: 0,
+            multiplier: "0.00",
+            efficiencyScore: 0,
         };
-    };
 
     // AI recommendation triggering — uses the deep /api/market/analyze endpoint
     const handleFetchAIRecommendation = async () => {
@@ -389,7 +401,8 @@ function ComparativeSIPAnalyzerContent() {
 
         setLoadingAi(true);
         setAiRecommendation("");
-        
+        setAiError("");
+
         const loaderPrompts = [
             "Retrieving real-time performance data...",
             "Analyzing CAGR and risk-reward matrices...",
@@ -435,7 +448,7 @@ function ComparativeSIPAnalyzerContent() {
 
             if (data.success && data.data) {
                 // Format structured analysis into readable markdown
-                const analysis = data.data;
+                const analysis = data.data as AnalyzeResponseData;
                 let formattedText = "";
 
                 if (analysis.verdict) {
@@ -444,7 +457,7 @@ function ComparativeSIPAnalyzerContent() {
 
                 if (analysis.ranking && Array.isArray(analysis.ranking)) {
                     formattedText += `### 📊 Investment Rankings\n\n`;
-                    analysis.ranking.forEach((r: any) => {
+                    analysis.ranking.forEach((r) => {
                         formattedText += `**#${r.rank} — ${r.name}** (Score: ${r.score}/100)\n${r.rationale}\n\n`;
                     });
                 }
@@ -502,13 +515,13 @@ function ComparativeSIPAnalyzerContent() {
                 if (fallbackData.success && fallbackData.text) {
                     setAiRecommendation(fallbackData.text);
                 } else {
-                    setAiRecommendation("Failed to receive AI feedback. Please try again.");
+                    setAiError("Failed to receive AI feedback. Please try again.");
                 }
             }
         } catch (e) {
             clearInterval(loaderInterval);
             console.error("AI analysis failed", e);
-            setAiRecommendation("Failed to connect to the WealthyMinds analysis engine. Please check your connection and try again.");
+            setAiError("Failed to connect to the WealthyMinds analysis engine. Please check your connection and try again.");
         } finally {
             setLoadingAi(false);
         }
@@ -602,6 +615,14 @@ function ComparativeSIPAnalyzerContent() {
                         </motion.div>
                     )}
                 </AnimatePresence>
+
+                {/* Details fetch error */}
+                {detailsError && (
+                    <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-negative-500/10 border border-negative-500/20">
+                        <AlertCircle className="h-3.5 w-3.5 text-negative-400 flex-shrink-0" />
+                        <p className="text-xs text-negative-400">{detailsError}</p>
+                    </div>
+                )}
             </Card>
 
             {/* Asset Selector Row */}
@@ -691,6 +712,7 @@ function ComparativeSIPAnalyzerContent() {
                             max="100000"
                             step="1000"
                             value={sipAmount}
+                            aria-label="Starting monthly SIP amount"
                             onChange={(e) => setSipAmount(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -715,6 +737,7 @@ function ComparativeSIPAnalyzerContent() {
                             max="30"
                             step="1"
                             value={years}
+                            aria-label="Investment time horizon in years"
                             onChange={(e) => setYears(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -742,6 +765,7 @@ function ComparativeSIPAnalyzerContent() {
                             max="25"
                             step="1"
                             value={stepUp}
+                            aria-label="Yearly SIP step-up percentage"
                             onChange={(e) => setStepUp(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500 focus:outline-none"
                         />
@@ -783,8 +807,11 @@ function ComparativeSIPAnalyzerContent() {
                                         tick={{ fill: "#94A3B8", fontSize: 10 }}
                                     />
                                     <Tooltip
-                                        formatter={(value: any, name: any) => [
-                                            `₹${Number(value).toLocaleString("en-IN")}`,
+                                        formatter={(
+                                            value: number | string | readonly (number | string)[] | undefined,
+                                            name: number | string | undefined,
+                                        ) => [
+                                            formatCurrency(Number(value), { decimals: 0 }),
                                             name === "Capital Invested" ? "Total Invested" : name,
                                         ]}
                                         contentStyle={{
@@ -832,6 +859,9 @@ function ComparativeSIPAnalyzerContent() {
                         <Award className="h-4.5 w-4.5 text-wealth-400" />
                         Comparison Matrix
                     </h3>
+                    <p className="text-[10px] text-text-tertiary leading-relaxed">
+                        Teller Efficiency = risk-adjusted return score: excess return over the FD rate (6.5%) per unit of volatility.
+                    </p>
 
                     {selectedAssets.map((asset, idx) => {
                         const m = getAssetSummaryMetrics(asset);
@@ -851,7 +881,7 @@ function ComparativeSIPAnalyzerContent() {
                                         </div>
                                     </div>
 
-                                    <div className="text-right">
+                                    <div className="text-right" title="Risk-adjusted return score: excess return over FD rate per unit volatility">
                                         <div className="text-xs text-text-tertiary">Teller Efficiency Score</div>
                                         <div className="text-lg font-extrabold text-wealth-400 flex items-center justify-end gap-1">
                                             <span>{m.efficiencyScore}</span>
@@ -864,13 +894,13 @@ function ComparativeSIPAnalyzerContent() {
                                     <div>
                                         <p className="text-[9px] text-text-tertiary uppercase">Investment</p>
                                         <p className="text-xs font-semibold text-text-primary mt-0.5">
-                                            ₹{Math.round(m.invested / 100000).toFixed(1)}L
+                                            {formatCurrency(m.invested, { compact: true })}
                                         </p>
                                     </div>
                                     <div>
                                         <p className="text-[9px] text-text-tertiary uppercase">Future Value</p>
                                         <p className="text-xs font-bold mt-0.5" style={{ color: c }}>
-                                            ₹{Math.round(m.futureValue / 100000).toFixed(1)}L
+                                            {formatCurrency(m.futureValue, { compact: true })}
                                         </p>
                                     </div>
                                     <div>
@@ -949,6 +979,21 @@ function ComparativeSIPAnalyzerContent() {
                         </motion.div>
                     )}
 
+                    {aiError && !loadingAi && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0 }}
+                            className="mt-6 p-6 border border-negative-500/20 rounded-xl bg-negative-500/5 flex items-center gap-3"
+                        >
+                            <AlertCircle className="h-5 w-5 text-negative-400 flex-shrink-0" />
+                            <div>
+                                <p className="text-sm font-semibold text-negative-400">AI analysis failed</p>
+                                <p className="text-xs text-text-secondary mt-0.5">{aiError}</p>
+                            </div>
+                        </motion.div>
+                    )}
+
                     {aiRecommendation && !loadingAi && (
                         <motion.div
                             initial={{ opacity: 0, y: 10 }}
@@ -958,10 +1003,6 @@ function ComparativeSIPAnalyzerContent() {
                             <div className="absolute top-4 right-4 flex items-center gap-2">
                                 <button
                                     onClick={() => {
-                                        const printContent = aiRecommendation
-                                            .replace(/\\n/g, '\n')
-                                            .replace(/### /g, '\n\n')
-                                            .replace(/\*\*/g, '');
                                         const printWindow = window.open('', '_blank');
                                         if (printWindow) {
                                             printWindow.document.write(`
@@ -984,9 +1025,9 @@ function ComparativeSIPAnalyzerContent() {
                                                     <h1>🧠 WealthyMinds AI Teller Report</h1>
                                                     <p class="meta">Generated on ${new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })} • Assets: ${selectedAssets.map(a => a.name).join(', ')}</p>
                                                     <p class="meta">SIP: ₹${sipAmount.toLocaleString('en-IN')}/month • Duration: ${years} years • Step-up: ${stepUp}%/year</p>
-                                                    ${aiRecommendation.split('\\n\\n').map(p => {
+                                                    ${aiRecommendation.split('\n\n').map(p => {
                                                         if (p.startsWith('###')) return `<h4>${p.replace('###', '').trim()}</h4>`;
-                                                        if (p.startsWith('* ') || p.startsWith('- ')) return `<ul>${p.split('\\n').map(li => `<li>${li.replace(/^[\*\-]\s+/, '')}</li>`).join('')}</ul>`;
+                                                        if (p.startsWith('* ') || p.startsWith('- ')) return `<ul>${p.split('\n').map(li => `<li>${li.replace(/^[*-]\s+/, '')}</li>`).join('')}</ul>`;
                                                         return `<p>${p}</p>`;
                                                     }).join('')}
                                                     <div class="footer">WealthyMinds — AI-Powered Wealth Intelligence • This is not financial advice</div>
@@ -1097,7 +1138,7 @@ function ComparativeSIPAnalyzerContent() {
                                         </label>
                                         <select
                                             value={customAsset.type || "Stock"}
-                                            onChange={(e) => setCustomAsset({ ...customAsset, type: e.target.value as any })}
+                                            onChange={(e) => setCustomAsset({ ...customAsset, type: e.target.value as Asset["type"] })}
                                             className="w-full px-3.5 py-2 rounded-lg bg-surface-50 border border-border-subtle text-text-primary focus:border-wealth-500 focus:outline-none transition-colors text-sm"
                                         >
                                             <option value="Stock">Stock / Share</option>
@@ -1127,7 +1168,7 @@ function ComparativeSIPAnalyzerContent() {
                                         </label>
                                         <select
                                             value={customAsset.volatility || "Medium"}
-                                            onChange={(e) => setCustomAsset({ ...customAsset, volatility: e.target.value as any })}
+                                            onChange={(e) => setCustomAsset({ ...customAsset, volatility: e.target.value as Asset["volatility"] })}
                                             className="w-full px-3.5 py-2 rounded-lg bg-surface-50 border border-border-subtle text-text-primary focus:border-wealth-500 focus:outline-none transition-colors text-sm"
                                         >
                                             <option value="Low">Low Volatility</option>

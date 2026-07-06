@@ -1,26 +1,22 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     PageHeader,
     Card,
-    CardHeader,
     CardTitle,
     Button,
     Badge,
 } from "@/components/ui";
-import { pageTransition, staggerContainer, staggerItem } from "@/lib/motion";
+import { pageTransition } from "@/lib/motion";
 import {
     Sparkles,
     Send,
     HelpCircle,
-    Info,
-    RefreshCw,
     User,
     ChevronRight,
-    TrendingUp,
     Shield,
 } from "lucide-react";
 
@@ -50,74 +46,77 @@ function AIInsightsPageContent() {
     const [loading, setLoading] = useState(false);
     const chatEndRef = useRef<HTMLDivElement>(null);
 
-    // Trigger initial search from Dashboard URL query
+    const submitQuestion = useCallback(
+        async (text: string) => {
+            if (!text.trim() || loading) return;
+
+            const userMessage: Message = { role: "user", content: text };
+            setMessages((prev) => [...prev, userMessage]);
+            setInputValue("");
+            setLoading(true);
+
+            try {
+                // Build the conversation history (skip the seeded welcome message).
+                const history = messages.slice(1).map((msg) => ({
+                    role: msg.role,
+                    content: msg.content,
+                }));
+
+                const response = await fetch("/api/ai/insights", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        prompt: text,
+                        history: history,
+                    }),
+                });
+
+                const data = await response.json();
+                if (data.success && data.text) {
+                    setMessages((prev) => [
+                        ...prev,
+                        { role: "assistant", content: data.text },
+                    ]);
+                } else {
+                    setMessages((prev) => [
+                        ...prev,
+                        {
+                            role: "assistant",
+                            content: "I'm sorry, I was unable to connect to my model. Please verify your internet connection or check API keys.",
+                        },
+                    ]);
+                }
+            } catch (e) {
+                console.error("Chat error", e);
+                setMessages((prev) => [
+                    ...prev,
+                    {
+                        role: "assistant",
+                        content: "An unexpected error occurred while communicating with the Teller engine. Please try again.",
+                    },
+                ]);
+            } finally {
+                setLoading(false);
+            }
+        },
+        [loading, messages],
+    );
+
+    // Trigger an initial question passed from the dashboard via ?ask=
     const initialTriggered = useRef(false);
     useEffect(() => {
         if (initialAsk && !initialTriggered.current) {
             initialTriggered.current = true;
             submitQuestion(initialAsk);
         }
-    }, [initialAsk]);
+    }, [initialAsk, submitQuestion]);
 
     // Scroll to bottom on new messages
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [messages, loading]);
-
-    const submitQuestion = async (text: string) => {
-        if (!text.trim() || loading) return;
-
-        const userMessage: Message = { role: "user", content: text };
-        setMessages((prev) => [...prev, userMessage]);
-        setInputValue("");
-        setLoading(true);
-
-        try {
-            // Build simple conversation history format for API
-            const history = messages.slice(1).map((msg) => ({
-                role: msg.role,
-                content: msg.content,
-            }));
-
-            const response = await fetch("/api/ai/insights", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    prompt: text,
-                    history: history,
-                }),
-            });
-
-            const data = await response.json();
-            if (data.success && data.text) {
-                setMessages((prev) => [
-                    ...prev,
-                    { role: "assistant", content: data.text },
-                ]);
-            } else {
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        role: "assistant",
-                        content: "I'm sorry, I was unable to connect to my model. Please verify your internet connection or check API keys.",
-                    },
-                ]);
-            }
-        } catch (e) {
-            console.error("Chat error", e);
-            setMessages((prev) => [
-                ...prev,
-                {
-                    role: "assistant",
-                    content: "An unexpected error occurred while communicating with the Teller engine. Please try again.",
-                },
-            ]);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const handleFormSubmit = (e: React.FormEvent) => {
         e.preventDefault();

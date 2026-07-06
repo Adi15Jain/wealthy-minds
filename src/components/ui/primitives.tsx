@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, type HTMLAttributes } from "react";
+import { forwardRef, type HTMLAttributes, type Ref } from "react";
 import { cn } from "@/lib/utils";
 
 // ── Glass Panel ──────────────────────────────────────────────
@@ -11,7 +11,8 @@ interface GlassPanelProps extends HTMLAttributes<HTMLDivElement> {
 const GlassPanel = forwardRef<HTMLDivElement, GlassPanelProps>(
     ({ className, intensity = "medium", children, ...props }, ref) => {
         const intensityClasses = {
-            light: "glass",
+            // Reduced blur/saturation for a lighter frosted effect.
+            light: "glass backdrop-blur-md backdrop-saturate-125",
             medium: "glass",
             strong: "glass-strong",
         };
@@ -41,7 +42,9 @@ interface SectionWrapperProps extends HTMLAttributes<HTMLElement> {
 const SectionWrapper = forwardRef<HTMLElement, SectionWrapperProps>(
     ({ className, as: Tag = "section", children, ...props }, ref) => (
         <Tag
-            ref={ref as any}
+            // HTMLDivElement is the narrowest of the three tags' element
+            // types; the ref receives the actual rendered element at runtime.
+            ref={ref as Ref<HTMLDivElement>}
             className={cn("py-section", className)}
             {...props}
         >

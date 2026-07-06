@@ -1,17 +1,22 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useState, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
     PageHeader,
     Card,
     CardHeader,
     CardTitle,
-    Button,
     Badge,
 } from "@/components/ui";
 import { pageTransition } from "@/lib/motion";
+import { formatCurrency } from "@/lib/utils";
+import { realRate, requiredMonthlySip, requiredStepUpSip } from "@/lib/finance";
+import {
+    useAssetSearch,
+    fetchAssetDetails,
+    type AssetSearchResult,
+} from "@/hooks/use-asset-search";
 import {
     Target,
     Calculator,
@@ -21,104 +26,78 @@ import {
     Loader2,
     Sparkles,
     ArrowRight,
-    IndianRupee,
     Zap,
+    AlertCircle,
 } from "lucide-react";
 
-interface SearchResult {
-    id: string;
-    name: string;
-    symbol: string;
-    type: string;
-    sector: string;
-}
+/**
+ * Compact INR formatter delegating to the shared formatCurrency:
+ * Cr/L for large values, plain rupees below ₹1L. Handles negatives and NaN.
+ */
+const formatINR = (val: number): string => {
+    if (!Number.isFinite(val)) return "—";
+    const abs = Math.abs(val);
+    const formatted =
+        abs >= 100000
+            ? formatCurrency(abs, { compact: true })
+            : formatCurrency(Math.round(abs), { decimals: 0 });
+    return val < 0 ? `-${formatted}` : formatted;
+};
 
 function GoalCalculatorContent() {
-    const searchParams = useSearchParams();
-
     // Goal parameters
     const [targetCorpus, setTargetCorpus] = useState<number>(10000000); // ₹1 Cr default
     const [years, setYears] = useState<number>(15);
     const [expectedCagr, setExpectedCagr] = useState<number>(14);
     const [stepUp, setStepUp] = useState<number>(10);
-    const [inflationRate, setInflationRate] = useState<number>(6);
+    const [inflationRate] = useState<number>(6);
     const [showInflationAdjusted, setShowInflationAdjusted] = useState(false);
 
     // Search for asset CAGR
     const [selectedAssetName, setSelectedAssetName] = useState("");
-    const [searchQuery, setSearchQuery] = useState("");
-    const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-    const [searchLoading, setSearchLoading] = useState(false);
     const [detailsLoading, setDetailsLoading] = useState(false);
+    const [detailsError, setDetailsError] = useState("");
     const [isFocused, setIsFocused] = useState(false);
 
-    // Debounced autocomplete
-    useEffect(() => {
-        if (searchQuery.trim().length < 2) { setSearchResults([]); return; }
-        const delay = setTimeout(async () => {
-            setSearchLoading(true);
-            try {
-                const res = await fetch(`/api/market/search?q=${encodeURIComponent(searchQuery)}`);
-                const data = await res.json();
-                if (data.success && data.content) setSearchResults(data.content);
-            } catch { /* ignore */ } finally { setSearchLoading(false); }
-        }, 300);
-        return () => clearTimeout(delay);
-    }, [searchQuery]);
+    // Debounced autocomplete (shared hook)
+    const {
+        query: searchQuery,
+        setQuery: setSearchQuery,
+        results: searchResults,
+        isSearching: searchLoading,
+        clear: clearSearch,
+    } = useAssetSearch();
 
-    const handleSelectAsset = async (item: SearchResult) => {
-        setSearchQuery("");
-        setSearchResults([]);
+    const handleSelectAsset = async (item: AssetSearchResult) => {
+        clearSearch();
         setDetailsLoading(true);
+        setDetailsError("");
         setSelectedAssetName(item.name);
         try {
-            const url = `/api/market/details?name=${encodeURIComponent(item.name)}&type=${encodeURIComponent(item.type)}&symbol=${encodeURIComponent(item.symbol)}&id=${encodeURIComponent(item.id)}`;
-            const res = await fetch(url);
-            const data = await res.json();
-            if (data.success && data.data?.cagr3y) setExpectedCagr(data.data.cagr3y);
-        } catch { /* ignore */ } finally { setDetailsLoading(false); }
+            const details = await fetchAssetDetails(item.name, item.type, item.symbol, item.id);
+            if (details.cagr3y) setExpectedCagr(details.cagr3y);
+        } catch (e) {
+            setDetailsError(
+                e instanceof Error
+                    ? e.message
+                    : "Failed to fetch asset details. Please try again.",
+            );
+        } finally {
+            setDetailsLoading(false);
+        }
     };
 
     // ── Reverse SIP Calculation ──────────────────────────────────
+    // Both cards use the SAME annuity-due convention from @/lib/finance.
     const effectiveCagr = showInflationAdjusted
-        ? ((1 + expectedCagr / 100) / (1 + inflationRate / 100) - 1) * 100
+        ? realRate(expectedCagr / 100, inflationRate / 100) * 100
         : expectedCagr;
 
-    const calcRequiredSIP = () => {
-        const r = effectiveCagr / 12 / 100;
-        const n = years * 12;
-        if (r === 0) return targetCorpus / n;
-        // FV of annuity: FV = PMT * [((1+r)^n - 1) / r]
-        const fvFactor = (Math.pow(1 + r, n) - 1) / r;
-        return targetCorpus / fvFactor;
-    };
-
-    const calcRequiredSIPWithStepUp = () => {
-        // Iterative approach: find SIP that reaches target with yearly step-up
-        let low = 100, high = targetCorpus / 12;
-        for (let iter = 0; iter < 100; iter++) {
-            const mid = (low + high) / 2;
-            const fv = simulateSIPWithStepUp(mid);
-            if (fv < targetCorpus) low = mid; else high = mid;
-        }
-        return (low + high) / 2;
-    };
-
-    const simulateSIPWithStepUp = (startingSIP: number) => {
-        const monthlyRate = effectiveCagr / 12 / 100;
-        let balance = 0;
-        let currentSIP = startingSIP;
-        for (let yr = 0; yr < years; yr++) {
-            for (let m = 0; m < 12; m++) {
-                balance = (balance + currentSIP) * (1 + monthlyRate);
-            }
-            currentSIP *= (1 + stepUp / 100);
-        }
-        return balance;
-    };
-
-    const requiredSIPNoStepUp = calcRequiredSIP();
-    const requiredSIPWithStepUp = stepUp > 0 ? calcRequiredSIPWithStepUp() : requiredSIPNoStepUp;
+    const requiredSIPNoStepUp = requiredMonthlySip(targetCorpus, effectiveCagr / 100, years);
+    const requiredSIPWithStepUp =
+        stepUp > 0
+            ? requiredStepUpSip(targetCorpus, effectiveCagr / 100, years, stepUp / 100)
+            : requiredSIPNoStepUp;
 
     const totalInvestedNoStepUp = requiredSIPNoStepUp * years * 12;
     const totalInvestedWithStepUp = (() => {
@@ -129,12 +108,6 @@ function GoalCalculatorContent() {
 
     const wealthGainNoStepUp = targetCorpus - totalInvestedNoStepUp;
     const wealthGainWithStepUp = targetCorpus - totalInvestedWithStepUp;
-
-    const formatCurrency = (val: number) => {
-        if (val >= 10000000) return `₹${(val / 10000000).toFixed(2)} Cr`;
-        if (val >= 100000) return `₹${(val / 100000).toFixed(2)} L`;
-        return `₹${Math.round(val).toLocaleString("en-IN")}`;
-    };
 
     // Preset target amounts
     const presets = [
@@ -188,7 +161,13 @@ function GoalCalculatorContent() {
                         )}
                     </AnimatePresence>
                 </div>
-                {selectedAssetName && (
+                {detailsError && (
+                    <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-negative-500/10 border border-negative-500/20 max-w-lg">
+                        <AlertCircle className="h-3.5 w-3.5 text-negative-400 flex-shrink-0" />
+                        <p className="text-xs text-negative-400">{detailsError}</p>
+                    </div>
+                )}
+                {selectedAssetName && !detailsError && (
                     <div className="mt-2">
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-wealth-600/10 text-wealth-400 border border-wealth-500/20">
                             <TrendingUp className="h-3 w-3" /> Using CAGR from: {selectedAssetName}
@@ -229,9 +208,10 @@ function GoalCalculatorContent() {
                     <div className="space-y-2">
                         <div className="flex justify-between items-center">
                             <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">Target Corpus</span>
-                            <span className="text-sm font-bold text-wealth-400">{formatCurrency(targetCorpus)}</span>
+                            <span className="text-sm font-bold text-wealth-400">{formatINR(targetCorpus)}</span>
                         </div>
                         <input type="range" min="500000" max="100000000" step="500000" value={targetCorpus}
+                            aria-label="Target corpus amount"
                             onChange={(e) => setTargetCorpus(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                         <div className="flex justify-between text-[10px] text-text-tertiary"><span>₹5L</span><span>₹5Cr</span><span>₹10Cr</span></div>
@@ -244,6 +224,7 @@ function GoalCalculatorContent() {
                             <span className="text-sm font-bold text-wealth-400">{years} Years</span>
                         </div>
                         <input type="range" min="1" max="30" step="1" value={years}
+                            aria-label="Investment timeline in years"
                             onChange={(e) => setYears(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                         <div className="flex justify-between text-[10px] text-text-tertiary"><span>1Y</span><span>15Y</span><span>30Y</span></div>
@@ -259,6 +240,7 @@ function GoalCalculatorContent() {
                             <span className="text-sm font-bold text-wealth-400">{expectedCagr}%</span>
                         </div>
                         <input type="range" min="5" max="25" step="0.5" value={expectedCagr}
+                            aria-label="Expected annual return (CAGR) percentage"
                             onChange={(e) => setExpectedCagr(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                         <div className="flex justify-between text-[10px] text-text-tertiary"><span>5%</span><span>15%</span><span>25%</span></div>
@@ -271,6 +253,7 @@ function GoalCalculatorContent() {
                             <span className="text-sm font-bold text-wealth-400">{stepUp}%</span>
                         </div>
                         <input type="range" min="0" max="25" step="1" value={stepUp}
+                            aria-label="Yearly SIP step-up percentage"
                             onChange={(e) => setStepUp(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                         <div className="flex justify-between text-[10px] text-text-tertiary"><span>0%</span><span>10%</span><span>25%</span></div>
@@ -309,18 +292,18 @@ function GoalCalculatorContent() {
                         <div>
                             <p className="text-[10px] uppercase text-text-tertiary font-bold tracking-wider">Required Monthly SIP</p>
                             <p className="text-3xl font-extrabold text-blue-400 mt-1">
-                                {formatCurrency(requiredSIPNoStepUp)}
+                                {formatINR(requiredSIPNoStepUp)}
                                 <span className="text-xs text-text-tertiary font-normal ml-1">/month</span>
                             </p>
                         </div>
                         <div className="grid grid-cols-2 gap-4 pt-3 border-t border-border-subtle">
                             <div>
                                 <p className="text-[9px] uppercase text-text-tertiary">Total Invested</p>
-                                <p className="text-sm font-bold text-text-primary">{formatCurrency(totalInvestedNoStepUp)}</p>
+                                <p className="text-sm font-bold text-text-primary">{formatINR(totalInvestedNoStepUp)}</p>
                             </div>
                             <div>
                                 <p className="text-[9px] uppercase text-text-tertiary">Wealth Gain</p>
-                                <p className="text-sm font-bold text-positive-500">{formatCurrency(wealthGainNoStepUp)}</p>
+                                <p className="text-sm font-bold text-positive-500">{formatINR(wealthGainNoStepUp)}</p>
                             </div>
                         </div>
                     </div>
@@ -340,26 +323,26 @@ function GoalCalculatorContent() {
                         <div>
                             <p className="text-[10px] uppercase text-text-tertiary font-bold tracking-wider">Starting Monthly SIP</p>
                             <p className="text-3xl font-extrabold text-wealth-400 mt-1">
-                                {formatCurrency(requiredSIPWithStepUp)}
+                                {formatINR(requiredSIPWithStepUp)}
                                 <span className="text-xs text-text-tertiary font-normal ml-1">/month</span>
                             </p>
                         </div>
                         <div className="grid grid-cols-2 gap-4 pt-3 border-t border-border-subtle">
                             <div>
                                 <p className="text-[9px] uppercase text-text-tertiary">Total Invested</p>
-                                <p className="text-sm font-bold text-text-primary">{formatCurrency(totalInvestedWithStepUp)}</p>
+                                <p className="text-sm font-bold text-text-primary">{formatINR(totalInvestedWithStepUp)}</p>
                             </div>
                             <div>
                                 <p className="text-[9px] uppercase text-text-tertiary">Wealth Gain</p>
-                                <p className="text-sm font-bold text-positive-500">{formatCurrency(wealthGainWithStepUp)}</p>
+                                <p className="text-sm font-bold text-positive-500">{formatINR(wealthGainWithStepUp)}</p>
                             </div>
                         </div>
                         <div className="p-3 rounded-lg bg-wealth-600/5 border border-wealth-500/10">
                             <p className="text-[11px] text-text-secondary leading-relaxed">
                                 <span className="font-bold text-wealth-400">💡 </span>
-                                With step-up, you start at <span className="font-bold">{formatCurrency(requiredSIPWithStepUp)}</span> and it grows to{" "}
-                                <span className="font-bold">{formatCurrency(requiredSIPWithStepUp * Math.pow(1 + stepUp / 100, years - 1))}</span> in the final year.
-                                This is <span className="font-bold text-positive-500">{formatCurrency(requiredSIPNoStepUp - requiredSIPWithStepUp)} less</span> than the fixed SIP initially.
+                                With step-up, you start at <span className="font-bold">{formatINR(requiredSIPWithStepUp)}</span> and it grows to{" "}
+                                <span className="font-bold">{formatINR(requiredSIPWithStepUp * Math.pow(1 + stepUp / 100, years - 1))}</span> in the final year.
+                                This is <span className="font-bold text-positive-500">{formatINR(requiredSIPNoStepUp - requiredSIPWithStepUp)} less</span> than the fixed SIP initially.
                             </p>
                         </div>
                     </div>

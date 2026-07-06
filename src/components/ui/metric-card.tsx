@@ -1,9 +1,11 @@
 "use client";
 
+import { useCallback } from "react";
 import { motion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { formatCurrency, formatPercentage } from "@/lib/utils";
 import { widgetEntrance } from "@/lib/motion";
+import { AnimatedNumber } from "./animated-number";
 import type { LucideIcon } from "lucide-react";
 
 interface MetricCardProps {
@@ -31,12 +33,15 @@ export function MetricCard({
     className,
     delay = 0,
 }: MetricCardProps) {
-    const formattedValue =
-        format === "currency"
-            ? formatCurrency(value, { compact })
-            : format === "percentage"
-              ? formatPercentage(value)
-              : value.toLocaleString("en-IN");
+    const formatValue = useCallback(
+        (current: number) =>
+            format === "currency"
+                ? formatCurrency(current, { compact })
+                : format === "percentage"
+                  ? formatPercentage(current)
+                  : Math.round(current).toLocaleString("en-IN"),
+        [format, compact],
+    );
 
     const trendColor =
         trend === "up"
@@ -65,7 +70,9 @@ export function MetricCard({
                 )}
             </div>
 
-            <div className="metric-value">{formattedValue}</div>
+            <div className="metric-value">
+                <AnimatedNumber value={value} format={formatValue} />
+            </div>
 
             {change !== undefined && (
                 <div className="flex items-center gap-2">

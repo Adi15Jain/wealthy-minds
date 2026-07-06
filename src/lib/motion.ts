@@ -4,6 +4,14 @@
  *
  * Philosophy: Smooth, intelligent, calm, premium.
  * Avoid: Excessive bouncing, gimmicky effects, noisy animations.
+ *
+ * Reduced motion: the app is wrapped in
+ * `<MotionConfig reducedMotion="user">` (src/components/providers.tsx),
+ * so framer-motion automatically disables transform/layout animations for
+ * users with `prefers-reduced-motion`. Prefer motion components over
+ * hand-rolled CSS animation so this guarantee holds; for imperative or
+ * conditional effects (e.g. mounting heavy visuals), gate on
+ * `useReducedMotion()` instead.
  */
 import type { Variants, Transition } from "framer-motion";
 
@@ -43,46 +51,11 @@ export const transitions = {
 };
 
 // ── Fade Variants ────────────────────────────────────────────
-export const fadeIn: Variants = {
-    hidden: { opacity: 0 },
-    visible: {
-        opacity: 1,
-        transition: transitions.calm,
-    },
-};
-
 export const fadeInUp: Variants = {
     hidden: { opacity: 0, y: 24 },
     visible: {
         opacity: 1,
         y: 0,
-        transition: transitions.smooth,
-    },
-};
-
-export const fadeInDown: Variants = {
-    hidden: { opacity: 0, y: -24 },
-    visible: {
-        opacity: 1,
-        y: 0,
-        transition: transitions.smooth,
-    },
-};
-
-export const fadeInLeft: Variants = {
-    hidden: { opacity: 0, x: -24 },
-    visible: {
-        opacity: 1,
-        x: 0,
-        transition: transitions.smooth,
-    },
-};
-
-export const fadeInRight: Variants = {
-    hidden: { opacity: 0, x: 24 },
-    visible: {
-        opacity: 1,
-        x: 0,
         transition: transitions.smooth,
     },
 };
@@ -169,12 +142,6 @@ export const sidebarVariants: Variants = {
 };
 
 // ── Hover Animations ─────────────────────────────────────────
-export const cardHover = {
-    scale: 1.01,
-    y: -2,
-    transition: transitions.fast,
-};
-
 export const buttonHover = {
     scale: 1.02,
     transition: transitions.fast,
@@ -182,21 +149,6 @@ export const buttonHover = {
 
 export const buttonTap = {
     scale: 0.98,
-};
-
-// ── Glass Panel ──────────────────────────────────────────────
-export const glassReveal: Variants = {
-    hidden: {
-        opacity: 0,
-        backdropFilter: "blur(0px)",
-        scale: 0.96,
-    },
-    visible: {
-        opacity: 1,
-        backdropFilter: "blur(20px)",
-        scale: 1,
-        transition: transitions.cinematic,
-    },
 };
 
 // ── Scroll-linked helpers ────────────────────────────────────
@@ -213,15 +165,3 @@ export const scrollFadeUp: Variants = {
     },
 };
 
-export const scrollScale: Variants = {
-    offscreen: { opacity: 0, scale: 0.9 },
-    onscreen: {
-        opacity: 1,
-        scale: 1,
-        transition: {
-            type: "tween",
-            duration: 0.7,
-            ease: [0.25, 0.46, 0.45, 0.94],
-        },
-    },
-};

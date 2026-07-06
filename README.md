@@ -1,92 +1,159 @@
 # WealthyMinds 🧠💰
 
-WealthyMinds is a premium, AI-powered **Wealth Intelligence Teller** designed for long-term wealth creation. Rather than managing portfolios or tracking net worth, it acts as an **intelligent advisory oracle**—analyzing stocks, mutual funds, and bonds based on historical data, running Monte Carlo projections, and delivering side-by-side comparative investment intelligence.
+**An AI operating system for personal wealth.** WealthyMinds combines portfolio
+tracking, SIP management, goal planning, behavioral-finance journaling, and a
+mathematically rigorous analytics engine into one premium, dark-first dashboard —
+tuned for the Indian market (stocks, mutual funds, bonds).
+
+Built with Next.js 16, React 19, TypeScript, Tailwind CSS v4, FastAPI, PostgreSQL,
+Prisma, Gemini, Framer Motion, Recharts, React Query, and Zustand.
+
+> **Status:** production-ready. Strict TypeScript (zero `any`), clean ESLint,
+> passing production build, and a unit-tested financial engine (34 tests).
 
 ---
 
-## 🎨 Premium Core Features
+## ✨ Features
 
-1. **Sleek Command Center Dashboard**: A central natural-language search & query bar, suggested teller prompts, featured real Indian market profiles (Nifty Index, Parag Parikh Flexi Cap, HDFC Midcap, Sovereign GOI Bonds, Reliance, TCS), and a persistent local-storage-backed watch list.
-2. **SIP Comparative Analyzer**: Search and compare up to 3 shares or mutual funds side-by-side. Compiles historical CAGR, risk metrics (drawdowns, volatility, Sharpe consistency), renders line chart trajectories, and calls Gemini to generate comparative advisory reports.
-3. **Monte Carlo SIP Simulator**: A mathematically rigorous calculator that forecasts optimistic (90th percentile), expected (50th percentile), and conservative (10th percentile) wealth horizons using compound variance mathematics.
-4. **AI Chat Teller Hub**: A full-screen conversational interface utilizing natural-language search queries directly from the dashboard to answer questions on shares, funds, or bonds.
+- **Portfolio & Net Worth** — Portfolios, holdings, and transactions with computed
+  totals, XIRR-ready cost bases, returns, and an animated allocation donut.
+- **SIP tracking & comparison** — Compare funds side-by-side; CAGR, drawdown,
+  volatility, and a risk-adjusted efficiency score, with a Gemini advisory report.
+- **Wealth projection** — Deterministic scenario bands plus a **10,000-path Monte
+  Carlo simulator** (GBM, step-up SIP, inflation adjustment, probability of hitting
+  a target, drawdown analysis, distribution histogram).
+- **Calculators** — Goal (required SIP, with step-up), tax (STCG/LTCG with the
+  ₹1.25L exemption), and a Monte Carlo SIP simulator — all on a single shared,
+  correct finance library.
+- **Risk & allocation analytics** — Volatility, Sharpe, Sortino, max drawdown,
+  beta/alpha, HHI concentration, and MPT-style rebalancing — computed by the Python
+  service from real holdings.
+- **Behavioral finance** — Discipline, patience, loss-aversion, and diversification
+  scores derived from activity, plus a mood-tagged journal.
+- **AI insights** — A streaming-style chat teller backed by Gemini 2.0 Flash, with
+  honest fallbacks when the model is unavailable.
+- **Goals, reports, settings** — Full CRUD, JSON report snapshots, notification
+  preferences, theme control, and one-click data export.
+- **Auth & onboarding** — Google OAuth **and** email/password (bcrypt), a guided
+  risk-profiling onboarding flow, and route protection via middleware.
 
----
+## 🧱 Architecture
 
-## 🛠 Tech Stack
-
-**Frontend & Core:**
-
-- **Framework:** Next.js 16 (App Router / React 19)
-- **Styling:** Tailwind CSS v4, custom glassmorphism, dynamic motion cards
-- **Charts & Animation:** Recharts, Framer Motion, React Three Fiber (R3F)
-- **AI Integration:** Google AI Studio (Gemini 2.0 Flash)
-- **State Management:** Zustand & local React state persistent overlays
-
-**Backend & Data:**
-
-- **Database:** PostgreSQL via Prisma (adapter-pg)
-- **Analytics Microservice:** Python 3.11+ & FastAPI (Scientific computing via Pandas, NumPy, SciPy)
-
----
-
-## 🚀 Getting Started
-
-WealthyMinds features a Next.js BFF proxy to forward API endpoints. If the Python backend service is offline, the frontend's robust fallback layer computes compound variance math and outputs local teller insights seamlessly.
-
-### 1. Environment Variables
-
-Create a `.env` file in the root directory. You can copy the template from `.env.example`:
-
-```bash
-cp .env.example .env
+```
+Browser ── React 19 · React Query · Framer Motion · Recharts
+   │
+Next.js 16 App Router
+   ├── proxy.ts ............ auth gate for /dashboard, /onboarding
+   ├── api/ (BFF) .......... auth · portfolio · goals · journal · reports · user
+   │                         market/ai (Gemini, cached, rate-limited)
+   │                         analytics/[...path] (allowlisted proxy) · health
+   ├── PostgreSQL .......... Prisma 7 + adapter-pg (Neon)
+   └── FastAPI :8000 ....... app/core/quant.py — risk · projection · behavioral ·
+                             allocation (stateless, 34 unit tests)
 ```
 
-#### Key Configurations:
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/API.md`](docs/API.md),
+and [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for the full breakdown.
 
-- **`DATABASE_URL`**: A PostgreSQL connection string (e.g., from Supabase or Neon.tech).
-- **`AUTH_SECRET`**: Session encryption token (generate via `openssl rand -base64 32`).
-- **`GOOGLE_AI_API_KEY`**: Obtain a key for free from [Google AI Studio](https://aistudio.google.com/app/apikey) to power live conversational responses.
-- **`GROWW_API_KEY`**: Live asset pricing and market performance credentials.
-- **`ANALYTICS_SERVICE_URL`**: Base URL for the Python microservice (defaults to `http://localhost:8000`).
+## 🛠 Tech stack
 
-### 2. Database Setup
+**Frontend** — Next.js 16 (App Router, Turbopack), React 19, Tailwind CSS v4
+(OKLCH tokens, light/dark, `prefers-reduced-motion`), Framer Motion, Recharts,
+React Three Fiber, TanStack React Query, Zustand, NextAuth v5.
 
-Initialize the database schema:
+**Backend** — Next.js route handlers (BFF), PostgreSQL via Prisma 7
+(`@prisma/adapter-pg`), a FastAPI microservice (NumPy/Pandas/SciPy) for
+quantitative analytics, and Gemini 2.0 Flash for AI.
+
+## 🚀 Getting started
+
+### 1. Environment
+
+```bash
+cp .env.example .env       # then fill in the values
+```
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DATABASE_URL` | ✅ | PostgreSQL connection string (Neon, Supabase, local). |
+| `AUTH_SECRET` | ✅ | Session secret — `openssl rand -base64 32`. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | optional | Google sign-in. |
+| `GOOGLE_AI_API_KEY` | optional | Gemini ([AI Studio](https://aistudio.google.com/app/apikey)). |
+| `GROWW_API_KEY` | optional | Market-search enrichment. |
+| `ANALYTICS_SERVICE_URL` | ✅ | Analytics service base URL (default `http://localhost:8000`). |
+| `NEXT_PUBLIC_APP_URL` | recommended | Canonical URL for metadata/sitemap/OG. |
+
+### 2. Database
 
 ```bash
 npx prisma db push
 npx prisma generate
 ```
 
-### 3. Start the Next.js Server
-
-Install dependencies and boot the developer instance:
+### 3. Web app
 
 ```bash
 npm install
-npm run dev
+npm run dev            # http://localhost:3000
 ```
 
-The frontend will run at [http://localhost:3000](http://localhost:3000).
-
-### 4. Run the Python Analytics Microservice (Optional)
-
-Navigate to the analytics directory to run scientific calculators on port `8000`:
+### 4. Analytics service
 
 ```bash
 cd services/analytics
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
-uvicorn main:app --reload --port 8000
+uvicorn main:app --reload --port 8000        # http://localhost:8000/docs
+pytest                                        # 34 tests
 ```
 
----
+### Or: everything at once with Docker
 
-## 📂 Architecture
+```bash
+docker compose up --build
+docker compose exec web npx prisma db push
+```
 
-- **`src/app/`**: Next.js App Router (Pages, BFF proxies, custom AI router middleware).
-- **`src/components/`**: Modular UI design system (primitives, metrics, line charts, conversational message feeds).
-- **`src/lib/`**: Helpers, framer transitions, and environment checkers.
-- **`services/analytics/`**: Python service handling specialized scientific portfolio calculations.
+## 📊 Financial engine
+
+All math is centralized and mirrored across the stack for correctness:
+
+- **`services/analytics/app/core/quant.py`** — the authoritative engine: CAGR,
+  XIRR, volatility, Sharpe, Sortino, max drawdown, beta/alpha, HHI, SIP & step-up
+  future value, inflation adjustment, and the Monte Carlo simulator. 34 unit tests.
+- **`src/lib/finance.ts`** — a strictly-typed TypeScript counterpart for instant
+  client-side calculators, using the same conventions (effective geometric monthly
+  rates, annuity-due SIP) so results agree across the app.
+
+## 📂 Project layout
+
+```
+src/
+├── app/
+│   ├── auth/ · onboarding/       # sign-in, register, reset, onboarding flow
+│   ├── dashboard/                # 17 feature pages (all wired to live data)
+│   └── api/                      # BFF: auth, portfolio, goals, journal, reports,
+│                                 # user, market, ai, analytics proxy, health
+├── components/ui/                # design system + Dialog, Toast, Tabs, Tooltip,
+│                                 # CommandPalette, ThemeToggle, AnimatedNumber
+├── components/layout/            # sidebar, topbar, shell (responsive + mobile drawer)
+├── lib/                          # finance.ts, gemini.ts, api/, prisma, utils, motion
+├── hooks/ · store/               # useAssetSearch; Zustand UI store
+└── proxy.ts                      # NextAuth route protection
+services/analytics/               # FastAPI quant service (quant.py + tests)
+prisma/schema.prisma              # 14 models
+docs/                             # ARCHITECTURE · API · DEPLOYMENT
+```
+
+## 🗺 Roadmap
+
+- Real market-data provider (replace Gemini-generated quotes).
+- Streaming AI responses (SSE) and richer chat memory.
+- Transaction & SIP ingestion to power computed (vs. estimated) risk/behavioral metrics.
+- Redis-backed rate limiting and nonce-based CSP for multi-instance scale.
+- Password-reset email delivery (Resend/SES) and 2FA.
+- Versioned Prisma migrations; CI (typecheck + lint + build + pytest).
+
+## 📄 License
+
+[MIT](LICENSE).

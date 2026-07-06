@@ -24,6 +24,7 @@ interface UIState {
     setSidebarExpanded: (expanded: boolean) => void;
     setSidebarMobileOpen: (open: boolean) => void;
     toggleCommandPalette: () => void;
+    setCommandPaletteOpen: (open: boolean) => void;
     openModal: (modal: string, data?: Record<string, unknown> | null) => void;
     closeModal: () => void;
     setNotificationCount: (count: number) => void;
@@ -51,6 +52,9 @@ export const useUIStore = create<UIState>()(
                 set((state) => ({
                     commandPaletteOpen: !state.commandPaletteOpen,
                 })),
+
+            setCommandPaletteOpen: (commandPaletteOpen) =>
+                set({ commandPaletteOpen }),
 
             openModal: (activeModal, modalData = null) =>
                 set({ activeModal, modalData }),

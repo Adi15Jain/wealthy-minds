@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
     PageHeader,
     Card,
     Badge,
+    toast,
 } from "@/components/ui";
 import { pageTransition } from "@/lib/motion";
 import {
@@ -15,7 +17,6 @@ import {
     RotateCcw,
     TrendingUp,
     Target,
-    Zap,
     CheckCircle2,
     ArrowRight,
     AlertTriangle,
@@ -182,32 +183,113 @@ const RISK_PROFILES: Record<string, RiskProfile> = {
     },
 };
 
+// Maps the quiz's RISK_PROFILES keys to the API's RiskProfile enum.
+const PROFILE_ENUM_MAP: Record<string, RiskProfileEnum> = {
+    conservative: "CONSERVATIVE",
+    moderate: "MODERATE",
+    growth: "GROWTH",
+    aggressive: "AGGRESSIVE",
+};
+
+type RiskProfileEnum =
+    | "CONSERVATIVE"
+    | "MODERATE"
+    | "BALANCED"
+    | "GROWTH"
+    | "AGGRESSIVE";
+
+interface ApiEnvelope<T> {
+    success?: boolean;
+    data?: T;
+    error?: { code?: string; message?: string };
+}
+
+async function fetchRiskProfile(): Promise<RiskProfileEnum | null> {
+    const res = await fetch("/api/user/risk-profile");
+    const json = (await res.json().catch(() => null)) as ApiEnvelope<{
+        riskProfile: RiskProfileEnum | null;
+    }> | null;
+    if (!res.ok || !json?.success || json.data === undefined) {
+        throw new Error(
+            json?.error?.message ?? `Request failed (${res.status})`,
+        );
+    }
+    return json.data.riskProfile;
+}
+
+async function saveRiskProfile(
+    riskProfile: RiskProfileEnum,
+): Promise<RiskProfileEnum | null> {
+    const res = await fetch("/api/user/risk-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ riskProfile }),
+    });
+    const json = (await res.json().catch(() => null)) as ApiEnvelope<{
+        riskProfile: RiskProfileEnum | null;
+    }> | null;
+    if (!res.ok || !json?.success || json.data === undefined) {
+        throw new Error(
+            json?.error?.message ?? `Request failed (${res.status})`,
+        );
+    }
+    return json.data.riskProfile;
+}
+
+function bucketForScoreRatio(pct: number): keyof typeof RISK_PROFILES {
+    if (pct <= 0.3) return "conservative";
+    if (pct <= 0.55) return "moderate";
+    if (pct <= 0.8) return "growth";
+    return "aggressive";
+}
+
 export default function RiskProfilePage() {
     const [currentQuestion, setCurrentQuestion] = useState(0);
     const [answers, setAnswers] = useState<Record<string, number>>({});
     const [showResult, setShowResult] = useState(false);
     const [direction, setDirection] = useState(0);
 
+    const queryClient = useQueryClient();
+    const savedProfileQuery = useQuery({
+        queryKey: ["risk-profile"],
+        queryFn: fetchRiskProfile,
+    });
+
+    const saveMutation = useMutation({
+        mutationFn: saveRiskProfile,
+        onSuccess: () => {
+            toast.success("Risk profile saved");
+            void queryClient.invalidateQueries({ queryKey: ["risk-profile"] });
+        },
+        onError: (error: Error) =>
+            toast.error("Could not save risk profile", {
+                description: error.message,
+            }),
+    });
+
+    const maxScore = QUESTIONS.length * 4;
+
     const handleAnswer = (questionId: string, score: number) => {
-        setAnswers(prev => ({ ...prev, [questionId]: score }));
+        const nextAnswers = { ...answers, [questionId]: score };
+        setAnswers(nextAnswers);
         if (currentQuestion < QUESTIONS.length - 1) {
             setDirection(1);
             setTimeout(() => setCurrentQuestion(prev => prev + 1), 150);
         } else {
+            const total = Object.values(nextAnswers).reduce(
+                (sum, s) => sum + s,
+                0,
+            );
+            const bucket = bucketForScoreRatio(total / maxScore);
+            saveMutation.mutate(PROFILE_ENUM_MAP[bucket]);
             setTimeout(() => setShowResult(true), 300);
         }
     };
 
     const totalScore = Object.values(answers).reduce((sum, s) => sum + s, 0);
-    const maxScore = QUESTIONS.length * 4;
 
-    const getProfile = (): RiskProfile => {
-        const pct = totalScore / maxScore;
-        if (pct <= 0.3) return RISK_PROFILES.conservative;
-        if (pct <= 0.55) return RISK_PROFILES.moderate;
-        if (pct <= 0.8) return RISK_PROFILES.growth;
-        return RISK_PROFILES.aggressive;
-    };
+    const getProfile = (): RiskProfile =>
+        RISK_PROFILES[bucketForScoreRatio(totalScore / maxScore)];
 
     const reset = () => {
         setCurrentQuestion(0);
@@ -230,6 +312,29 @@ export default function RiskProfilePage() {
                 title="Risk Profile Assessment"
                 description="Answer 5 quick questions to understand your risk tolerance. Get personalized asset allocation and investment recommendations."
             />
+
+            {savedProfileQuery.data && !showResult && (
+                <Card padding="md" className="border border-wealth-500/20 bg-wealth-500/5">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                            <Shield className="h-4.5 w-4.5 text-wealth-400 flex-shrink-0" />
+                            <p className="text-sm text-text-secondary">
+                                Current profile:{" "}
+                                <span className="font-bold text-wealth-400">
+                                    {savedProfileQuery.data.charAt(0) +
+                                        savedProfileQuery.data.slice(1).toLowerCase()}
+                                </span>
+                            </p>
+                        </div>
+                        <button
+                            onClick={reset}
+                            className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-surface-100 text-text-secondary text-xs font-bold hover:bg-surface-200 transition-colors self-start sm:self-auto"
+                        >
+                            <RotateCcw className="h-3.5 w-3.5" /> Retake assessment
+                        </button>
+                    </div>
+                </Card>
+            )}
 
             {!showResult ? (
                 <>

@@ -1,25 +1,19 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import {
     PageHeader,
     Card,
-    CardHeader,
-    CardTitle,
     Badge,
+    EmptyState,
 } from "@/components/ui";
 import { pageTransition, staggerContainer, staggerItem } from "@/lib/motion";
+import { formatCurrency } from "@/lib/utils";
 import {
     Grid3X3,
-    TrendingUp,
-    TrendingDown,
-    Star,
-    Loader2,
     AlertCircle,
     ArrowRight,
-    Shield,
-    Zap,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -179,6 +173,12 @@ export default function FundExplorerPage() {
                                             <p className="text-[9px] uppercase text-text-tertiary">Expense</p>
                                             <p className="text-xs font-bold text-text-primary">{fund.expenseRatio}%</p>
                                         </div>
+                                        <div className="text-center hidden sm:block">
+                                            <p className="text-[9px] uppercase text-text-tertiary">Min SIP</p>
+                                            <p className="text-xs font-bold text-text-primary">
+                                                {fund.minSIP ? formatCurrency(fund.minSIP, { decimals: 0 }) : "—"}
+                                            </p>
+                                        </div>
                                     </div>
 
                                     {/* Actions */}
@@ -199,6 +199,17 @@ export default function FundExplorerPage() {
                         </motion.div>
                     ))}
                 </motion.div>
+            )}
+
+            {/* Empty state — API succeeded but returned no funds */}
+            {!loading && !error && funds.length === 0 && (
+                <Card padding="lg">
+                    <EmptyState
+                        icon={<Grid3X3 className="h-10 w-10" />}
+                        title="No funds found"
+                        description={`No ${selectedCategory} funds are available right now. Try a different category or check back later.`}
+                    />
+                </Card>
             )}
 
             {/* Min SIP Info */}

@@ -10,17 +10,27 @@ import {
     Badge,
 } from "@/components/ui";
 import { pageTransition } from "@/lib/motion";
+import { formatCurrency } from "@/lib/utils";
 import {
-    Receipt,
     Calculator,
-    HelpCircle,
-    TrendingUp,
     AlertTriangle,
-    IndianRupee,
     Zap,
-    ArrowRight,
     Info,
 } from "lucide-react";
+
+/**
+ * Compact INR formatter delegating to the shared formatCurrency:
+ * Cr/L for large values, plain rupees below ₹1L. Handles negatives.
+ */
+const formatINR = (val: number): string => {
+    if (!Number.isFinite(val)) return "—";
+    const abs = Math.abs(val);
+    const formatted =
+        abs >= 100000
+            ? formatCurrency(abs, { compact: true })
+            : formatCurrency(Math.round(abs), { decimals: 0 });
+    return val < 0 ? `-${formatted}` : formatted;
+};
 
 type InvestmentType = "equity_mf" | "equity_stock" | "debt_mf" | "elss";
 
@@ -139,11 +149,15 @@ export default function TaxCalculatorPage() {
 
     const { tax, effectiveRate, postTaxGain, postTaxValue } = calcTax();
 
-    const formatCurrency = (val: number) => {
-        if (Math.abs(val) >= 10000000) return `₹${(val / 10000000).toFixed(2)} Cr`;
-        if (Math.abs(val) >= 100000) return `₹${(val / 100000).toFixed(2)} L`;
-        return `₹${Math.round(val).toLocaleString("en-IN")}`;
-    };
+    // Honest STCG→LTCG saving: STCG tax on the full gain minus LTCG tax on
+    // the gain AFTER the exemption, clamped at zero.
+    const stcgTax = totalGain * (rule.stcgRate / 100);
+    const ltcgTaxAfterExemption = Math.max(0, totalGain - rule.ltcgExemption) * (rule.ltcgRate / 100);
+    const potentialLtcgSaving = Math.max(0, stcgTax - ltcgTaxAfterExemption);
+
+    // Actual tax saved by the LTCG exemption: only the exempted portion of
+    // the REALIZED gain avoids tax.
+    const exemptionSaving = Math.min(Math.max(totalGain, 0), rule.ltcgExemption) * (rule.ltcgRate / 100);
 
     return (
         <motion.div variants={pageTransition} initial="initial" animate="animate" className="space-y-8">
@@ -184,9 +198,10 @@ export default function TaxCalculatorPage() {
                     <div className="space-y-2">
                         <div className="flex justify-between items-center">
                             <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">Amount Invested</span>
-                            <span className="text-sm font-bold text-wealth-400">{formatCurrency(investedAmount)}</span>
+                            <span className="text-sm font-bold text-wealth-400">{formatINR(investedAmount)}</span>
                         </div>
                         <input type="range" min="10000" max="10000000" step="10000" value={investedAmount}
+                            aria-label="Amount invested"
                             onChange={(e) => setInvestedAmount(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                     </div>
@@ -195,9 +210,10 @@ export default function TaxCalculatorPage() {
                     <div className="space-y-2">
                         <div className="flex justify-between items-center">
                             <span className="text-xs font-bold uppercase tracking-wider text-text-secondary">Current Value</span>
-                            <span className="text-sm font-bold text-wealth-400">{formatCurrency(currentValue)}</span>
+                            <span className="text-sm font-bold text-wealth-400">{formatINR(currentValue)}</span>
                         </div>
                         <input type="range" min="10000" max="20000000" step="10000" value={currentValue}
+                            aria-label="Current investment value"
                             onChange={(e) => setCurrentValue(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                     </div>
@@ -211,6 +227,7 @@ export default function TaxCalculatorPage() {
                             </span>
                         </div>
                         <input type="range" min="1" max="120" step="1" value={holdingMonths}
+                            aria-label="Holding period in months"
                             onChange={(e) => setHoldingMonths(Number(e.target.value))}
                             className="w-full h-1 bg-surface-200 rounded-lg appearance-none cursor-pointer accent-wealth-500" />
                     </div>
@@ -218,8 +235,9 @@ export default function TaxCalculatorPage() {
                     {/* Income Slab (for debt funds) */}
                     {investmentType === "debt_mf" && (
                         <div className="space-y-2">
-                            <span className="text-xs font-bold uppercase tracking-wider text-text-secondary block">Your Tax Slab</span>
+                            <label htmlFor="income-slab" className="text-xs font-bold uppercase tracking-wider text-text-secondary block">Your Tax Slab</label>
                             <select
+                                id="income-slab"
                                 value={incomeSlab}
                                 onChange={(e) => setIncomeSlab(Number(e.target.value))}
                                 className="w-full px-3 py-2 rounded-xl bg-surface-50 border border-border-subtle text-sm text-text-primary focus:border-wealth-500 focus:outline-none"
@@ -239,9 +257,12 @@ export default function TaxCalculatorPage() {
                 <Card padding="md" className="border-t-2 border-t-blue-500 text-center">
                     <p className="text-[10px] uppercase text-text-tertiary font-bold tracking-wider mb-1">Pre-Tax Gain</p>
                     <p className={`text-2xl font-extrabold ${isProfit ? "text-positive-500" : "text-negative-400"}`}>
-                        {isProfit ? "+" : ""}{formatCurrency(totalGain)}
+                        {isProfit ? "+" : ""}{formatINR(totalGain)}
                     </p>
-                    <Badge variant={isLongTerm ? "positive" : "warning"} className="mt-2 text-[9px]">
+                    <Badge
+                        variant={investmentType === "debt_mf" ? "outline" : isLongTerm ? "positive" : "warning"}
+                        className="mt-2 text-[9px]"
+                    >
                         {investmentType === "debt_mf" ? "Slab Rate" : isLongTerm ? "Long-Term Capital Gain" : "Short-Term Capital Gain"}
                     </Badge>
                 </Card>
@@ -250,7 +271,7 @@ export default function TaxCalculatorPage() {
                 <Card padding="md" className="border-t-2 border-t-negative-400 text-center">
                     <p className="text-[10px] uppercase text-text-tertiary font-bold tracking-wider mb-1">Tax Payable</p>
                     <p className="text-2xl font-extrabold text-negative-400">
-                        {formatCurrency(tax)}
+                        {formatINR(tax)}
                     </p>
                     <p className="text-xs text-text-tertiary mt-1">
                         Effective Rate: <span className="font-bold text-text-secondary">{effectiveRate.toFixed(1)}%</span>
@@ -261,10 +282,10 @@ export default function TaxCalculatorPage() {
                 <Card padding="md" className="border-t-2 border-t-wealth-500 text-center">
                     <p className="text-[10px] uppercase text-text-tertiary font-bold tracking-wider mb-1">Post-Tax Gain</p>
                     <p className={`text-2xl font-extrabold ${postTaxGain >= 0 ? "text-wealth-400" : "text-negative-400"}`}>
-                        {postTaxGain >= 0 ? "+" : ""}{formatCurrency(postTaxGain)}
+                        {postTaxGain >= 0 ? "+" : ""}{formatINR(postTaxGain)}
                     </p>
                     <p className="text-xs text-text-tertiary mt-1">
-                        You take home: <span className="font-bold text-text-secondary">{formatCurrency(postTaxValue)}</span>
+                        You take home: <span className="font-bold text-text-secondary">{formatINR(postTaxValue)}</span>
                     </p>
                 </Card>
             </div>
@@ -319,8 +340,8 @@ export default function TaxCalculatorPage() {
                             </p>
                             <p className="text-xs text-text-secondary mt-1">
                                 {holdingMonths < 12
-                                    ? `Converting to LTCG would change your tax from ${rule.stcgRate}% to ${rule.ltcgRate}% (with ₹${(rule.ltcgExemption / 100000).toFixed(2)}L exemption). Potential saving: ${formatCurrency(totalGain * (rule.stcgRate - rule.ltcgRate) / 100)}.`
-                                    : `Your ₹${(rule.ltcgExemption / 100000).toFixed(2)}L LTCG exemption saved you ${formatCurrency(rule.ltcgExemption * rule.ltcgRate / 100)} in taxes.`
+                                    ? `Converting to LTCG would change your tax from ${rule.stcgRate}% to ${rule.ltcgRate}% (with ₹${(rule.ltcgExemption / 100000).toFixed(2)}L exemption). Potential saving: ${formatINR(potentialLtcgSaving)}.`
+                                    : `Your ₹${(rule.ltcgExemption / 100000).toFixed(2)}L LTCG exemption saved you ${formatINR(exemptionSaving)} in taxes.`
                                 }
                             </p>
                         </div>

@@ -14,8 +14,10 @@ const authRoutes = ["/auth"];
 export const proxy = auth((request) => {
     const { pathname } = request.nextUrl;
     
-    // request.auth is populated by Auth.js
-    const isAuthenticated = !!request.auth;
+    // request.auth is populated by Auth.js. In NextAuth v5 beta it can be a
+    // truthy object with no `user` for anonymous requests, so gate on the
+    // presence of an actual authenticated user, not just `request.auth`.
+    const isAuthenticated = !!request.auth?.user;
 
     // Redirect authenticated users away from auth pages
     if (

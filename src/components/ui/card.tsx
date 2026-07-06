@@ -30,13 +30,19 @@ const cardVariants = cva("rounded-xl transition-all duration-200", {
     },
 });
 
-export interface CardProps extends VariantProps<typeof cardVariants> {
+/**
+ * Div attributes minus the handlers whose names collide with
+ * framer-motion's MotionProps — lets props spread safely into
+ * both <div> and <motion.div>.
+ */
+type SafeDivAttributes = Omit<
+    HTMLAttributes<HTMLDivElement>,
+    "onDrag" | "onDragStart" | "onDragEnd" | "onAnimationStart"
+>;
+
+export interface CardProps
+    extends SafeDivAttributes, VariantProps<typeof cardVariants> {
     animate?: boolean;
-    className?: string;
-    children?: React.ReactNode;
-    id?: string;
-    style?: React.CSSProperties;
-    onClick?: () => void;
 }
 
 const Card = forwardRef<HTMLDivElement, CardProps>(
@@ -54,6 +60,7 @@ const Card = forwardRef<HTMLDivElement, CardProps>(
                     variants={widgetEntrance}
                     initial="hidden"
                     animate="visible"
+                    {...props}
                 >
                     {children}
                 </motion.div>
